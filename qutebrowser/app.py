@@ -34,7 +34,9 @@ import tokenize
 from PyQt5.QtWidgets import QApplication, QWidget
 from PyQt5.QtGui import QDesktopServices, QPixmap, QIcon, QWindow
 from PyQt5.QtCore import (pyqtSlot, qInstallMessageHandler, QTimer, QUrl,
-                          QObject, QEvent, pyqtSignal)
+                          QObject, QEvent, pyqtSignal, )
+import PyQt5.QtCore as QtCore
+
 try:
     import hunter
 except ImportError:
@@ -197,6 +199,7 @@ def _process_args(args):
     if not session_manager.did_load:
         log.init.debug("Initializing main window...")
         window = mainwindow.MainWindow(private=None)
+        window.setWindowFlags(QtCore.Qt.FramelessWindowHint)
         if not args.nowindow:
             window.show()
         qApp.setActiveWindow(window)
@@ -469,6 +472,9 @@ def _init_modules(args, crash_handler):
     diskcache = cache.DiskCache(standarddir.cache(), parent=qApp)
     objreg.register('cache', diskcache)
 
+    log.init.debug("Initializing completions...")
+    completionmodels.init()
+
     log.init.debug("Misc initialization...")
     if config.get('ui', 'hide-wayland-decoration'):
         os.environ['QT_WAYLAND_DISABLE_WINDOWDECORATION'] = '1'
@@ -477,6 +483,23 @@ def _init_modules(args, crash_handler):
     macros.init()
     # Init backend-specific stuff
     browsertab.init()
+
+
+def _init_late_modules(args):
+    """Initialize modules which can be inited after the window is shown."""
+    log.init.debug("Reading web history...")
+    reader = objreg.get('web-history').async_read()
+    with debug.log_time(log.init, 'Reading history'):
+        while True:
+            QApplication.processEvents()
+            try:
+                next(reader)
+            except StopIteration:
+                break
+            except (OSError, UnicodeDecodeError) as e:
+                error.handle_fatal_exc(e, args, "Error while initializing!",
+                                       pre_text="Error while initializing")
+                sys.exit(usertypes.Exit.err_init)
 
 
 class Quitter:
