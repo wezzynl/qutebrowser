@@ -156,8 +156,8 @@ def build_osx():
 
 def patch_windows(out_dir):
     """Copy missing DLLs for windows into the given output."""
-    dll_dir = os.path.join('.tox', 'pyinstaller', 'lib', 'python3.6',
-                           'site-packages', 'PyQt5')
+    dll_dir = os.path.join('.tox', 'pyinstaller', 'lib', 'site-packages',
+                           'PyQt5', 'Qt', 'bin')
     dlls = ['libEGL.dll', 'libGLESv2.dll', 'libeay32.dll', 'ssleay32.dll']
     for dll in dlls:
         shutil.copy(os.path.join(dll_dir, dll), out_dir)
