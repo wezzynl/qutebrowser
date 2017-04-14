@@ -169,10 +169,7 @@ def remove_tox_pyinstaller_src():
     WORKAROUND for https://github.com/tox-dev/tox/issues/503
     """
     src_dir = os.path.join('.tox', 'pyinstaller', 'src', 'pyinstaller')
-    try:
-        shutil.rmtree(src_dir)
-    except FileNotFoundError:
-        pass
+    shutil.rmtree(src_dir, ignore_errors=True)
 
 
 def build_windows():
