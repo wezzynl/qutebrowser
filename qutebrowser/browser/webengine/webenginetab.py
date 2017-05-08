@@ -40,7 +40,7 @@ from qutebrowser.browser.webengine import (webview, webengineelem, tabhistory,
                                            webenginedownloads)
 from qutebrowser.misc import miscwidgets
 from qutebrowser.utils import (usertypes, qtutils, log, javascript, utils,
-                               objreg, jinja)
+                               objreg, jinja, debug)
 
 
 _qute_scheme_handler = None
@@ -128,12 +128,21 @@ class WebEngineSearch(browsertab.AbstractSearch):
         super().__init__(parent)
         self._flags = QWebEnginePage.FindFlags(0)
 
-    def _find(self, text, flags, cb=None):
-        """Call findText on the widget with optional callback."""
-        if cb is None:
-            self._widget.findText(text, flags)
-        else:
-            self._widget.findText(text, flags, cb)
+    def _find(self, text, flags, callback, caller):
+        """Call findText on the widget."""
+        def wrapped_callback(found):
+            """Wrap the callback to do debug logging."""
+            found_text = 'found' if found else "didn't find"
+            if flags:
+                flag_text = 'with flags {}'.format(debug.qflags_key(
+                    QWebEnginePage, flags, klass=QWebEnginePage.FindFlag))
+            else:
+                flag_text = ''
+            log.webview.debug(' '.join([caller, found_text, text, flag_text])
+                              .strip())
+            if callback is not None:
+                callback(found)
+        self._widget.findText(text, flags, wrapped_callback)
 
     def search(self, text, *, ignore_case=False, reverse=False,
                result_cb=None):
@@ -148,7 +157,7 @@ class WebEngineSearch(browsertab.AbstractSearch):
 
         self.text = text
         self._flags = flags
-        self._find(text, flags, result_cb)
+        self._find(text, flags, result_cb, 'search')
 
     def clear(self):
         self._widget.findText('')
@@ -160,10 +169,10 @@ class WebEngineSearch(browsertab.AbstractSearch):
             flags &= ~QWebEnginePage.FindBackward
         else:
             flags |= QWebEnginePage.FindBackward
-        self._find(self.text, flags, result_cb)
+        self._find(self.text, flags, result_cb, 'prev_result')
 
     def next_result(self, *, result_cb=None):
-        self._find(self.text, self._flags, result_cb)
+        self._find(self.text, self._flags, result_cb, 'next_result')
 
 
 class WebEngineCaret(browsertab.AbstractCaret):
@@ -369,16 +378,15 @@ class WebEngineHistory(browsertab.AbstractHistory):
         return self._history.canGoForward()
 
     def serialize(self):
-        # WORKAROUND (remove this when we bump the requirements to 5.9)
-        # https://bugreports.qt.io/browse/QTBUG-59599
-        if self._history.count() == 0:
-            raise browsertab.WebTabError("Can't serialize page without "
-                                         "history!")
-        # WORKAROUND (FIXME: remove this when we bump the requirements to 5.9?)
-        # https://github.com/qutebrowser/qutebrowser/issues/2289
-        scheme = self._history.currentItem().url().scheme()
-        if scheme in ['view-source', 'chrome']:
-            raise browsertab.WebTabError("Can't serialize special URL!")
+        if not qtutils.version_check('5.9'):
+            # WORKAROUND for
+            # https://github.com/qutebrowser/qutebrowser/issues/2289
+            # Don't use the history's currentItem here, because of
+            # https://bugreports.qt.io/browse/QTBUG-59599 and because it doesn't
+            # contain view-source.
+            scheme = self._tab.url().scheme()
+            if scheme in ['view-source', 'chrome']:
+                raise browsertab.WebTabError("Can't serialize special URL!")
         return qtutils.serialize(self._history)
 
     def deserialize(self, data):

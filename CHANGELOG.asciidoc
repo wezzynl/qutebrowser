@@ -28,6 +28,7 @@ Added
   filters.
 - New `--debug-flag` argument which replaces `--debug-exit` and
   `--pdb-postmortem`.
+- New `tabs -> favicon-scale` option to scale up/down favicons.
 
 Changed
 ~~~~~~~
@@ -47,6 +48,11 @@ Changed
   to frequent crashes due to a Qt bug.
 - stdin is now closed immediately for processes spawned from qutebrowser
 - When ui -> message-timeout is set to 0, messages are now never cleared.
+- Middle/right-clicking the blank parts of the tab bar (when vertical) now
+  closes the current tab.
+- With Qt 5.9, `content -> cookies-store` can now be set on QtWebEngine without
+  a restart.
+- The adblocker now also blocks non-GET requests (e.g. POST)
 
 Fixed
 ~~~~~
@@ -61,7 +67,10 @@ Fixed
 - Crash when the key config isn't writable
 - Crash when unbinding an unbound key in the key config
 - Crash when using `:debug-log-filter` when `--filter` wasn't given on startup.
+- Crash with some invalid setting values
+- Crash when cloning a view-source tab with QtWebEngine
 - Various rare crashes
+- Various styling issues with the tabbar and a crash with qt5ct
 
 v0.10.1
 -------
