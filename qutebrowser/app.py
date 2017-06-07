@@ -34,7 +34,9 @@ import tokenize
 from PyQt5.QtWidgets import QApplication, QWidget
 from PyQt5.QtGui import QDesktopServices, QPixmap, QIcon, QWindow
 from PyQt5.QtCore import (pyqtSlot, qInstallMessageHandler, QTimer, QUrl,
-                          QObject, QEvent, pyqtSignal)
+                          QObject, QEvent, pyqtSignal, )
+import PyQt5.QtCore as QtCore
+
 try:
     import hunter
 except ImportError:
@@ -196,6 +198,7 @@ def _process_args(args):
     if not session_manager.did_load:
         log.init.debug("Initializing main window...")
         window = mainwindow.MainWindow(private=None)
+        window.setWindowFlags(QtCore.Qt.FramelessWindowHint)
         if not args.nowindow:
             window.show()
         qApp.setActiveWindow(window)
