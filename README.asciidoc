@@ -36,7 +36,11 @@ Downloads
 ---------
 
 See the https://github.com/qutebrowser/qutebrowser/releases[github releases
+page] for available downloads (currently a source archive, and standalone
+packages as well as MSI installers for Windows).
+
 page] for available downloads and the link:INSTALL.asciidoc[INSTALL] file for
+qutebrowser running for various platforms.
 detailed instructions on how to get qutebrowser running on various platforms.
 
 Documentation
@@ -121,6 +125,11 @@ The following software and libraries are required to run qutebrowser:
 
 The following libraries are optional:
 
+* http://cthedot.de/cssutils/[cssutils]
+
+To generate the documentation for the `:help` command, when using the git
+repository (rather than a release), http://asciidoc.org/[asciidoc] is needed.
+
 * http://cthedot.de/cssutils/[cssutils] (for an improved `:download --mhtml`
   with QtWebKit)
 * On Windows, https://pypi.python.org/pypi/colorama/[colorama] for colored log
@@ -150,8 +159,165 @@ get in touch!
 Authors
 -------
 
+Contributors, sorted by the number of commits in descending order:
+
+// QUTE_AUTHORS_START
+* Florian Bruhin
+* Daniel Schadt
+* Ryan Roden-Corrent
+* Jan Verbeek
+* Jakub Klinkovský
+* Antoni Boucher
+* Lamar Pavel
+* Marshall Lochbaum
+* Bruno Oliveira
+* thuck
+* Martin Tournoij
+* Imran Sobir
+* Alexander Cogneau
+* Felix Van der Jeugt
+* Daniel Karbach
+* Kevin Velghe
+* Raphael Pierzina
+* Joel Torstensson
+* Jay Kamat
+* Patric Schmitz
+* Fritz Reichwald
+* Tarcisio Fedrizzi
+* Claude
+* Philipp Hansch
+* Corentin Julé
+* meles5
+* Panagiotis Ktistakis
+* Artur Shaik
+* Nathan Isom
+* Thorsten Wißmann
+* Austin Anderson
+* Jimmy
+* Iordanis Grigoriou
+* Niklas Haas
+* Maciej Wołczyk
+* Clayton Craft
+* sandrosc
+* Alexey "Averrin" Nabrodov
+* pkill9
+* nanjekyejoannah
+* avk
+* ZDarian
+* Milan Svoboda
+* John ShaggyTwoDope Jenkins
+* Peter Vilim
+* Jacob Sword
+* knaggita
+* Yashar Shahi
+* Oliver Caldwell
+* Nikolay Amiantov
+* Marius
+* Julian Weigt
+* Tomasz Kramkowski
+* Sebastian Frysztak
+* Julie Engel
+* Jonas Schürmann
+* error800
+* Michael Hoang
+* Liam BEGUIN
+* Daniel Fiser
+* skinnay
+* Zach-Button
+* Samuel Walladge
+* Peter Rice
+* Ismail S
+* Halfwit
+* David Vogt
+* Claire Cavanaugh
+* Christian Helbling
+* rikn00
+* kanikaa1234
+* haitaka
+* Nick Ginther
+* Michał Góral
+* Michael Ilsaas
+* Martin Zimmermann
+* Link
+* Jussi Timperi
+* Cosmin Popescu
+* Brian Jackson
+* sbinix
+* rsteube
+* neeasade
+* jnphilipp
+* Yannis Rohloff
+* Tobias Patzl
+* Stefan Tatschner
+* Samuel Loury
+* Peter Michely
+* Panashe M. Fundira
+* Lucas Hoffmann
+* Larry Hynes
+* Kirill A. Shutemov
+* Johannes Altmanninger
+* Jeremy Kaplan
+* Ismail
+* Edgar Hipp
+* Daryl Finlay
+* arza
+* adam
+* Samir Benmendil
+* Regina Hug
+* Penaz
+* Matthias Lisin
+* Mathias Fussenegger
+* Marcelo Santos
+* Marcel Schilling
+* Joel Bradshaw
+* Jean-Louis Fuchs
+* Franz Fellner
+* Eric Drechsel
+* zwarag
+* xd1le
+* rmortens
+* oniondreams
+* issue
+* haxwithaxe
+* evan
+* dylan araps
+* caveman
+* addictedtoflames
+* Xitian9
+* Vasilij Schneidermann
+* Tomas Orsava
+* Tom Janson
+* Tobias Werth
+* Tim Harder
+* Thiago Barroso Perrotta
+* Steve Peak
+* Sorokin Alexei
+* Simon Désaulniers
+* Rok Mandeljc
+* Noah Huesser
+* Moez Bouhlel
+* MikeinRealLife
+* Lazlow Carmichael
+* Kevin Wang
+* Ján Kobezda
+* Justin Partain
+* Johannes Martinsson
+* Jean-Christophe Petkovich
+* Helen Sherwood-Taylor
+* HalosGhost
+* Gregor Pohl
+* Eivind Uggedal
+* Dietrich Daroch
 qutebrowser's primary author is Florian Bruhin (The Compiler), but qutebrowser
+* Daniel Lu
+* Daniel Jakots
+* Daniel Hahler
+* Arseniy Seroka
 wouldn't be what it is without the help of
+* Andy Balaam
+* Andreas Fischer
+* Amos Bird
+* Akselmo
 https://github.com/qutebrowser/qutebrowser/graphs/contributors[hundreds of contributors]!
 
 Additionally, the following people have contributed graphics:
@@ -161,10 +327,33 @@ Additionally, the following people have contributed graphics:
 * regines (key binding cheatsheet)
 
 Also, thanks to everyone who contributed to one of qutebrowser's
+-------------------------
+
 link:doc/backers.asciidoc[crowdfunding campaigns]!
 
 Similar projects
 ----------------
+main inspiration for qutebrowser)
+* https://github.com/fanglingsu/vimb[vimb] (C, GTK+ with WebKit1, active)
+* http://sourceforge.net/p/vimprobable/wiki/Home/[vimprobable] (C, GTK+ with
+WebKit1, dead)
+* http://surf.suckless.org/[surf] (C, GTK+ with WebKit1, active)
+* https://mason-larobina.github.io/luakit/[luakit] (C/Lua, GTK+ with
+WebKit1, not very active)
+* http://pwmt.org/projects/jumanji/[jumanji] (C, GTK+ with WebKit1, not very
+active)
+* http://www.uzbl.org/[uzbl] (C, GTK+ with WebKit1/WebKit2, active)
+* http://conkeror.org/[conkeror] (Javascript, Emacs-like, XULRunner/Gecko,
+active)
+* https://github.com/AeroNotix/lispkit[lispkit] (quite new, lisp, GTK+ with
+WebKit, active)
+* http://www.vimperator.org/[Vimperator] (Firefox addon)
+* http://5digits.org/pentadactyl/[Pentadactyl] (Firefox addon)
+* https://github.com/akhodakivskiy/VimFx[VimFx] (Firefox addon)
+* https://github.com/1995eaton/chromium-vim[cVim] (Chrome/Chromium addon)
+* http://vimium.github.io/[vimium] (Chrome/Chromium addon)
+* https://chrome.google.com/webstore/detail/vichrome/gghkfhpblkcmlkmpcpgaajbbiikbhpdi?hl=en[ViChrome] (Chrome/Chromium addon)
+* https://github.com/jinzhu/vrome[Vrome] (Chrome/Chromium addon)
 
 Many projects with a similar goal as qutebrowser exist.
 Most of them were inspirations for qutebrowser in some way, thanks for that!
