@@ -200,6 +200,7 @@ def _process_args(args):
         log.init.debug("Initializing main window...")
         window = mainwindow.MainWindow(private=None)
         window.setWindowFlags(QtCore.Qt.FramelessWindowHint)
+        window.show()
         if not args.nowindow:
             window.show()
         qApp.setActiveWindow(window)
