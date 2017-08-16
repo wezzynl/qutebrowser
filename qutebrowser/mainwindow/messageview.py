@@ -36,8 +36,7 @@ class Message(QLabel):
         self.replace = replace
         self.setAttribute(Qt.WA_StyledBackground, True)
         stylesheet = """
-            padding-top: 2px;
-            padding-bottom: 2px;
+            padding: 6px 6px 5px 5px;
         """
         if level == usertypes.MessageLevel.error:
             stylesheet += """
