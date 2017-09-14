@@ -200,6 +200,7 @@ def _process_args(args):
         log.init.debug("Initializing main window...")
         window = mainwindow.MainWindow(private=None)
         window.setWindowFlags(QtCore.Qt.FramelessWindowHint)
+        #window.setWindowFlags(QtCore.Qt.CustomizeWindowHint)
         window.show()
         if not args.nowindow:
             window.show()
@@ -472,9 +473,6 @@ def _init_modules(args, crash_handler):
     log.init.debug("Initializing cache...")
     diskcache = cache.DiskCache(standarddir.cache(), parent=qApp)
     objreg.register('cache', diskcache)
-
-    log.init.debug("Initializing completions...")
-    completionmodels.init()
 
     log.init.debug("Misc initialization...")
     if config.get('ui', 'hide-wayland-decoration'):
