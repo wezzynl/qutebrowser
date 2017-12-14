@@ -19,11 +19,13 @@
 
 """The main statusbar widget."""
 
+import enum
+import attr
 from PyQt5.QtCore import pyqtSignal, pyqtSlot, pyqtProperty, Qt, QSize, QTimer
 from PyQt5.QtWidgets import QWidget, QHBoxLayout, QStackedLayout, QSizePolicy
 
 from qutebrowser.browser import browsertab
-from qutebrowser.config import config, style
+from qutebrowser.config import config
 from qutebrowser.utils import usertypes, log, objreg, utils
 from qutebrowser.mainwindow.statusbar import (backforward, command, progress,
                                               keystring, percentage, url,
@@ -31,6 +33,7 @@ from qutebrowser.mainwindow.statusbar import (backforward, command, progress,
 from qutebrowser.mainwindow.statusbar import text as textwidget
 
 
+@attr.s
 class ColorFlags:
 
     """Flags which change the appearance of the statusbar.
@@ -41,16 +44,16 @@ class ColorFlags:
         command: If we're currently in command mode.
         mode: The current caret mode (CaretMode.off/.on/.selection).
         private: Whether this window is in private browsing mode.
+        passthrough: If we're currently in passthrough-mode.
     """
 
-    CaretMode = usertypes.enum('CaretMode', ['off', 'on', 'selection'])
-
-    def __init__(self):
-        self.prompt = False
-        self.insert = False
-        self.command = False
-        self.caret = self.CaretMode.off
-        self.private = False
+    CaretMode = enum.Enum('CaretMode', ['off', 'on', 'selection'])
+    prompt = attr.ib(False)
+    insert = attr.ib(False)
+    command = attr.ib(False)
+    caret = attr.ib(CaretMode.off)
+    private = attr.ib(False)
+    passthrough = attr.ib(False)
 
     def to_stringlist(self):
         """Get a string list of set flags used in the stylesheet.
@@ -66,6 +69,8 @@ class ColorFlags:
             strings.append('command')
         if self.private:
             strings.append('private')
+        if self.passthrough:
+            strings.append('passthrough')
 
         if self.private and self.command:
             strings.append('private-command')
@@ -82,21 +87,22 @@ class ColorFlags:
 
 def _generate_stylesheet():
     flags = [
-        ('private', 'statusbar.{}.private'),
-        ('caret', 'statusbar.{}.caret'),
-        ('caret-selection', 'statusbar.{}.caret-selection'),
-        ('prompt', 'prompts.{}'),
-        ('insert', 'statusbar.{}.insert'),
-        ('command', 'statusbar.{}.command'),
-        ('private-command', 'statusbar.{}.command.private'),
+        ('private', 'statusbar.private'),
+        ('caret', 'statusbar.caret'),
+        ('caret-selection', 'statusbar.caret.selection'),
+        ('prompt', 'prompts'),
+        ('insert', 'statusbar.insert'),
+        ('command', 'statusbar.command'),
+        ('passthrough', 'statusbar.passthrough'),
+        ('private-command', 'statusbar.command.private'),
     ]
     stylesheet = """
         QWidget#StatusBar,
         QWidget#StatusBar QLabel,
         QWidget#StatusBar QLineEdit {
-            font: {{ font['statusbar'] }};
-            background-color: {{ color['statusbar.bg'] }};
-            color: {{ color['statusbar.fg'] }};
+            font: {{ conf.fonts.statusbar }};
+            background-color: {{ conf.colors.statusbar.normal.bg }};
+            color: {{ conf.colors.statusbar.normal.fg }};
         }
     """
     for flag, option in flags:
@@ -104,11 +110,11 @@ def _generate_stylesheet():
             QWidget#StatusBar[color_flags~="%s"],
             QWidget#StatusBar[color_flags~="%s"] QLabel,
             QWidget#StatusBar[color_flags~="%s"] QLineEdit {
-                color: {{ color['%s'] }};
-                background-color: {{ color['%s'] }};
+                color: {{ conf.colors.%s }};
+                background-color: {{ conf.colors.%s }};
             }
         """ % (flag, flag, flag,  # flake8: disable=S001
-               option.format('fg'), option.format('bg'))
+               option + '.fg', option + '.bg')
     return stylesheet
 
 
@@ -148,7 +154,7 @@ class StatusBar(QWidget):
         objreg.register('statusbar', self, scope='window', window=win_id)
         self.setObjectName(self.__class__.__name__)
         self.setAttribute(Qt.WA_StyledBackground)
-        style.set_register_stylesheet(self)
+        config.set_register_stylesheet(self)
 
         self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
 
@@ -197,33 +203,31 @@ class StatusBar(QWidget):
         self.prog = progress.Progress(self)
         self._hbox.addWidget(self.prog)
 
-        objreg.get('config').changed.connect(self._on_config_changed)
+        config.instance.changed.connect(self._on_config_changed)
         QTimer.singleShot(0, self.maybe_hide)
 
     def __repr__(self):
         return utils.get_repr(self)
 
-    @pyqtSlot(str, str)
-    def _on_config_changed(self, section, option):
-        if section != 'ui':
-            return
-        if option == 'hide-statusbar':
+    @pyqtSlot(str)
+    def _on_config_changed(self, option):
+        if option == 'statusbar.hide':
             self.maybe_hide()
-        elif option == 'statusbar-pdading':
+        elif option == 'statusbar.padding':
             self._set_hbox_padding()
 
     @pyqtSlot()
     def maybe_hide(self):
         """Hide the statusbar if it's configured to do so."""
-        hide = config.get('ui', 'hide-statusbar')
         tab = self._current_tab()
+        hide = config.val.statusbar.hide
         if hide or (tab is not None and tab.data.fullscreen):
             self.hide()
         else:
             self.show()
 
     def _set_hbox_padding(self):
-        padding = config.get('ui', 'statusbar-padding')
+        padding = config.val.statusbar.padding
         self._hbox.setContentsMargins(padding.left, 0, padding.right, 0)
 
     @pyqtProperty('QStringList')
@@ -246,6 +250,9 @@ class StatusBar(QWidget):
         if mode == usertypes.KeyMode.insert:
             log.statusbar.debug("Setting insert flag to {}".format(val))
             self._color_flags.insert = val
+        if mode == usertypes.KeyMode.passthrough:
+            log.statusbar.debug("Setting passthrough flag to {}".format(val))
+            self._color_flags.passthrough = val
         if mode == usertypes.KeyMode.command:
             log.statusbar.debug("Setting command flag to {}".format(val))
             self._color_flags.command = val
@@ -265,11 +272,21 @@ class StatusBar(QWidget):
                     self._color_flags.caret = ColorFlags.CaretMode.on
             else:
                 self._color_flags.caret = ColorFlags.CaretMode.off
-        self.setStyleSheet(style.get_stylesheet(self.STYLESHEET))
+        config.set_register_stylesheet(self, update=False)
 
     def _set_mode_text(self, mode):
         """Set the mode text."""
-        text = "-- {} MODE --".format(mode.upper())
+        if mode == 'passthrough':
+            key_instance = config.key_instance
+            all_bindings = key_instance.get_reverse_bindings_for('passthrough')
+            bindings = all_bindings.get('leave-mode')
+            if bindings:
+                suffix = ' ({} to leave)'.format(bindings[0])
+            else:
+                suffix = ''
+        else:
+            suffix = ''
+        text = "-- {} MODE --{}".format(mode.upper(), suffix)
         self.txt.set_text(self.txt.Text.normal, text)
 
     def _show_cmd_widget(self):
@@ -299,7 +316,8 @@ class StatusBar(QWidget):
                     usertypes.KeyMode.command,
                     usertypes.KeyMode.caret,
                     usertypes.KeyMode.prompt,
-                    usertypes.KeyMode.yesno]:
+                    usertypes.KeyMode.yesno,
+                    usertypes.KeyMode.passthrough]:
             self.set_mode_active(mode, True)
 
     @pyqtSlot(usertypes.KeyMode, usertypes.KeyMode)
@@ -316,7 +334,8 @@ class StatusBar(QWidget):
                         usertypes.KeyMode.command,
                         usertypes.KeyMode.caret,
                         usertypes.KeyMode.prompt,
-                        usertypes.KeyMode.yesno]:
+                        usertypes.KeyMode.yesno,
+                        usertypes.KeyMode.passthrough]:
             self.set_mode_active(old_mode, False)
 
     @pyqtSlot(browsertab.AbstractTab)
@@ -349,7 +368,7 @@ class StatusBar(QWidget):
 
     def minimumSizeHint(self):
         """Set the minimum height to the text height plus some padding."""
-        padding = config.get('ui', 'statusbar-padding')
+        padding = config.val.statusbar.padding
         width = super().minimumSizeHint().width()
         height = self.fontMetrics().height() + padding.top + padding.bottom
         return QSize(width, height)

@@ -38,9 +38,10 @@ from qutebrowser.browser.webkit import rfc6266
 from qutebrowser.browser.webkit.network import webkitqutescheme
 # pylint: enable=unused-import
 from qutebrowser.browser import qutescheme
+from qutebrowser.config import configtypes
 
 
-def whitelist_generator():
+def whitelist_generator():  # noqa
     """Generator which yields lines to add to a vulture whitelist."""
     # qutebrowser commands
     for cmd in cmdutils.cmd_dict.values():
@@ -63,7 +64,6 @@ def whitelist_generator():
     yield 'qutebrowser.utils.debug.qflags_key'
     yield 'qutebrowser.utils.qtutils.QtOSError.qt_errno'
     yield 'scripts.utils.bg_colors'
-    yield 'qutebrowser.config.configtypes.Float'
 
     # Qt attributes
     yield 'PyQt5.QtWebKit.QWebPage.ErrorPageExtensionReturn().baseUrl'
@@ -78,8 +78,7 @@ def whitelist_generator():
         yield 'qutebrowser.browser.qutescheme.qute_' + name
 
     # Other false-positives
-    yield ('qutebrowser.completion.models.sortfilter.CompletionFilterModel().'
-           'lessThan')
+    yield 'qutebrowser.completion.models.listcategory.ListCategory().lessThan'
     yield 'qutebrowser.utils.jinja.Loader.get_source'
     yield 'qutebrowser.utils.log.QtWarningFilter.filter'
     yield 'qutebrowser.browser.pdfjs.is_available'
@@ -99,15 +98,31 @@ def whitelist_generator():
     for attr in ['fileno', 'truncate', 'closed', 'readable']:
         yield 'qutebrowser.utils.qtutils.PyQIODevice.' + attr
 
-    for attr in ['priority', 'visit_call']:
+    for attr in ['msgs', 'priority', 'visit_attribute']:
         yield 'scripts.dev.pylint_checkers.config.' + attr
+    for attr in ['visit_call', 'process_module']:
+        yield 'scripts.dev.pylint_checkers.modeline.' + attr
 
-    yield 'scripts.dev.pylint_checkers.modeline.process_module'
-    yield 'scripts.dev.pylint_checkers.qute_pylint.config.msgs'
+    for name, member in inspect.getmembers(configtypes, inspect.isclass):
+        yield 'qutebrowser.config.configtypes.' + name
+    yield 'qutebrowser.config.configexc.ConfigErrorDesc.traceback'
+    yield 'qutebrowser.config.configfiles.ConfigAPI.load_autoconfig'
+    yield 'types.ModuleType.c'  # configfiles:read_config_py
+    for name in ['configdir', 'datadir']:
+        yield 'qutebrowser.config.configfiles.ConfigAPI.' + name
+
+    yield 'include_aliases'
 
     for attr in ['_get_default_metavar_for_optional',
                  '_get_default_metavar_for_positional', '_metavar_formatter']:
         yield 'scripts.dev.src2asciidoc.UsageFormatter.' + attr
+
+    # attrs
+    yield 'qutebrowser.browser.webkit.network.networkmanager.ProxyId.hostname'
+    yield 'qutebrowser.command.command.ArgInfo._validate_exclusive'
+    yield 'scripts.get_coredumpctl_traces.Line.uid'
+    yield 'scripts.get_coredumpctl_traces.Line.gid'
+    yield 'scripts.importer.import_moz_places.places.row_factory'
 
 
 def filter_func(item):
@@ -127,11 +142,9 @@ def report(items):
     properties which get used for the items.
     """
     output = []
-    for item in sorted(items, key=lambda e: (e.filename.lower(), e.lineno)):
-        relpath = os.path.relpath(item.filename)
-        path = relpath if not relpath.startswith('..') else item.filename
-        output.append("{}:{}: Unused {} '{}'".format(path, item.lineno,
-                                                     item.typ, item.name))
+    for item in sorted(items,
+                       key=lambda e: (e.filename.lower(), e.first_lineno)):
+        output.append(item.get_report())
     return output
 
 
@@ -143,7 +156,7 @@ def run(files):
 
         whitelist_file.close()
 
-        vult = vulture.Vulture(exclude=[], verbose=False)
+        vult = vulture.Vulture(verbose=False)
         vult.scavenge(files + [whitelist_file.name])
 
         os.remove(whitelist_file.name)

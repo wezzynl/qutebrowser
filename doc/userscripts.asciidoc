@@ -31,7 +31,7 @@ The following environment variables will be set when a userscript is launched:
 
 - `QUTE_MODE`: Either `hints` (started via hints) or `command` (started via
   command or key binding).
-- `QUTE_USER_AGENT`: The currently set user agent.
+- `QUTE_USER_AGENT`: The currently set user agent, if customized.
 - `QUTE_FIFO`: The FIFO or file to write commands to.
 - `QUTE_HTML`: Path of a file containing the HTML source of the current page.
 - `QUTE_TEXT`: Path of a file containing the plaintext of the current page.
@@ -78,3 +78,11 @@ Opening the currently selected word on http://www.dict.cc/[dict.cc]:
 
 echo "open -t http://www.dict.cc/?s=$QUTE_SELECTED_TEXT" >> "$QUTE_FIFO"
 ----
+
+Libraries
+---------
+
+Some third-party libraries are available to make writing userscripts easier:
+
+- Python: https://github.com/hiway/python-qutescript[python-qutescript]
+- Node.js: https://www.npmjs.com/package/qutejs[qutejs]

@@ -15,7 +15,8 @@ def get_data_files():
         ('../qutebrowser/img', 'img'),
         ('../qutebrowser/javascript', 'javascript'),
         ('../qutebrowser/html/doc', 'html/doc'),
-        ('../qutebrowser/git-commit-id', '')
+        ('../qutebrowser/git-commit-id', ''),
+        ('../qutebrowser/config/configdata.yml', 'config'),
     ]
 
     # if os.path.exists(os.path.join('qutebrowser', '3rdparty', 'pdfjs')):
@@ -70,9 +71,5 @@ coll = COLLECT(exe,
 app = BUNDLE(coll,
              name='qutebrowser.app',
              icon=icon,
-             info_plist={
-                 'NSHighResolutionCapable': 'True',
-                 'NSSupportsAutomaticGraphicsSwitching': 'True',
-             },
              # https://github.com/pyinstaller/pyinstaller/blob/b78bfe530cdc2904f65ce098bdf2de08c9037abb/PyInstaller/hooks/hook-PyQt5.QtWebEngineWidgets.py#L24
              bundle_identifier='org.qt-project.Qt.QtWebEngineCore')

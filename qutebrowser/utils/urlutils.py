@@ -26,10 +26,10 @@ import ipaddress
 import posixpath
 import urllib.parse
 
-from PyQt5.QtCore import QUrl
+from PyQt5.QtCore import QUrl, QUrlQuery
 from PyQt5.QtNetwork import QHostInfo, QHostAddress, QNetworkProxy
 
-from qutebrowser.config import config, configexc
+from qutebrowser.config import config
 from qutebrowser.utils import log, qtutils, message, utils
 from qutebrowser.commands import cmdexc
 from qutebrowser.browser.network import pac
@@ -70,8 +70,8 @@ def _parse_search_term(s):
     if len(split) == 2:
         engine = split[0]
         try:
-            config.get('searchengines', engine)
-        except configexc.NoOptionError:
+            config.val.url.searchengines[engine]
+        except KeyError:
             engine = None
             term = s
         else:
@@ -99,9 +99,8 @@ def _get_search_url(txt):
     engine, term = _parse_search_term(txt)
     assert term
     if engine is None:
-        template = config.get('searchengines', 'DEFAULT')
-    else:
-        template = config.get('searchengines', engine)
+        engine = 'DEFAULT'
+    template = config.val.url.searchengines[engine]
     url = qurl_from_user_input(template.format(urllib.parse.quote(term)))
     qtutils.ensure_valid(url)
     return url
@@ -194,7 +193,7 @@ def fuzzy_url(urlstr, cwd=None, relative=False, do_search=True,
         url = qurl_from_user_input(urlstr)
     log.url.debug("Converting fuzzy term {!r} to URL -> {}".format(
                   urlstr, url.toDisplayString()))
-    if do_search and config.get('general', 'auto-search') and urlstr:
+    if do_search and config.val.url.auto_search != 'never' and urlstr:
         qtutils.ensure_valid(url)
     else:
         if not url.isValid():
@@ -239,7 +238,7 @@ def is_url(urlstr):
     Return:
         True if it is a valid URL, False otherwise.
     """
-    autosearch = config.get('general', 'auto-search')
+    autosearch = config.val.url.auto_search
 
     log.url.debug("Checking if {!r} is a URL (autosearch={}).".format(
                   urlstr, autosearch))
@@ -248,7 +247,7 @@ def is_url(urlstr):
     qurl = QUrl(urlstr)
     qurl_userinput = qurl_from_user_input(urlstr)
 
-    if not autosearch:
+    if autosearch == 'never':
         # no autosearch, so everything is a URL unless it has an explicit
         # search engine.
         try:
@@ -270,7 +269,7 @@ def is_url(urlstr):
         log.url.debug("Is localhost.")
         url = True
     elif is_special_url(qurl):
-        # Special URLs are always URLs, even with autosearch=False
+        # Special URLs are always URLs, even with autosearch=never
         log.url.debug("Is a special URL.")
         url = True
     elif autosearch == 'dns':
@@ -373,10 +372,17 @@ def get_path_if_valid(pathstr, cwd=None, relative=False, check_exists=False):
         path = None
 
     if check_exists:
-        if path is not None and os.path.exists(path):
-            log.url.debug("URL is a local file")
-        else:
-            path = None
+        if path is not None:
+            try:
+                if os.path.exists(path):
+                    log.url.debug("URL is a local file")
+                else:
+                    path = None
+            except UnicodeEncodeError:
+                log.url.debug(
+                    "URL contains characters which are not present in the "
+                    "current locale")
+                path = None
 
     return path
 
@@ -605,7 +611,7 @@ def safe_display_string(qurl):
         raise InvalidUrlError(qurl)
 
     host = qurl.host(QUrl.FullyEncoded)
-    if '..' in host:
+    if '..' in host:  # pragma: no cover
         # WORKAROUND for https://bugreports.qt.io/browse/QTBUG-60364
         return '(unparseable URL!) {}'.format(qurl.toDisplayString())
 
@@ -614,6 +620,18 @@ def safe_display_string(qurl):
             return '({}) {}'.format(host, qurl.toDisplayString())
 
     return qurl.toDisplayString()
+
+
+def query_string(qurl):
+    """Get a query string for the given URL.
+
+    This is a WORKAROUND for:
+    https://www.riverbankcomputing.com/pipermail/pyqt/2017-November/039702.html
+    """
+    try:
+        return qurl.query()
+    except AttributeError:  # pragma: no cover
+        return QUrlQuery(qurl).query()
 
 
 class InvalidProxyTypeError(Exception):
@@ -638,7 +656,9 @@ def proxy_from_url(url):
 
     scheme = url.scheme()
     if scheme in ['pac+http', 'pac+https', 'pac+file']:
-        return pac.PACFetcher(url)
+        fetcher = pac.PACFetcher(url)
+        fetcher.fetch()
+        return fetcher
 
     types = {
         'http': QNetworkProxy.HttpProxy,

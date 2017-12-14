@@ -19,16 +19,18 @@
 
 """URL displayed in the statusbar."""
 
+import enum
+
 from PyQt5.QtCore import pyqtSlot, pyqtProperty, Qt, QUrl
 
 from qutebrowser.mainwindow.statusbar import textbase
-from qutebrowser.config import style
+from qutebrowser.config import config
 from qutebrowser.utils import usertypes, urlutils
 
 
 # Note this has entries for success/error/warn from widgets.webview:LoadStatus
-UrlType = usertypes.enum('UrlType', ['success', 'success_https', 'error',
-                                     'warn', 'hover', 'normal'])
+UrlType = enum.Enum('UrlType', ['success', 'success_https', 'error', 'warn',
+                                'hover', 'normal'])
 
 
 class UrlText(textbase.TextBase):
@@ -53,27 +55,27 @@ class UrlText(textbase.TextBase):
 
     STYLESHEET = """
         QLabel#UrlText[urltype="normal"] {
-            color: {{ color['statusbar.url.fg'] }};
+            color: {{ conf.colors.statusbar.url.fg }};
         }
 
         QLabel#UrlText[urltype="success"] {
-            color: {{ color['statusbar.url.fg.success'] }};
+            color: {{ conf.colors.statusbar.url.success.http.fg }};
         }
 
         QLabel#UrlText[urltype="success_https"] {
-            color: {{ color['statusbar.url.fg.success.https'] }};
+            color: {{ conf.colors.statusbar.url.success.https.fg }};
         }
 
         QLabel#UrlText[urltype="error"] {
-            color: {{ color['statusbar.url.fg.error'] }};
+            color: {{ conf.colors.statusbar.url.error.fg }};
         }
 
         QLabel#UrlText[urltype="warn"] {
-            color: {{ color['statusbar.url.fg.warn'] }};
+            color: {{ conf.colors.statusbar.url.warn.fg }};
         }
 
         QLabel#UrlText[urltype="hover"] {
-            color: {{ color['statusbar.url.fg.hover'] }};
+            color: {{ conf.colors.statusbar.url.hover.fg }};
         }
     """
 
@@ -81,7 +83,7 @@ class UrlText(textbase.TextBase):
         """Override TextBase.__init__ to elide in the middle by default."""
         super().__init__(parent, Qt.ElideMiddle)
         self.setObjectName(self.__class__.__name__)
-        style.set_register_stylesheet(self)
+        config.set_register_stylesheet(self)
         self._hover_url = None
         self._normal_url = None
         self._normal_url_type = UrlType.normal
@@ -109,7 +111,7 @@ class UrlText(textbase.TextBase):
         else:
             self.setText('')
             self._urltype = UrlType.normal
-        self.setStyleSheet(style.get_stylesheet(self.STYLESHEET))
+        config.set_register_stylesheet(self, update=False)
 
     @pyqtSlot(str)
     def on_load_status_changed(self, status_str):

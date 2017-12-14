@@ -24,22 +24,23 @@ import functools
 import math
 import re
 import html
+import enum
 from string import ascii_lowercase
 
+import attr
 from PyQt5.QtCore import pyqtSlot, QObject, Qt, QUrl
 from PyQt5.QtWidgets import QLabel
 
-from qutebrowser.config import config, style
+from qutebrowser.config import config
 from qutebrowser.keyinput import modeman, modeparsers
 from qutebrowser.browser import webelem
 from qutebrowser.commands import userscripts, cmdexc, cmdutils, runners
 from qutebrowser.utils import usertypes, log, qtutils, message, objreg, utils
 
 
-Target = usertypes.enum('Target', ['normal', 'current', 'tab', 'tab_fg',
-                                   'tab_bg', 'window', 'yank', 'yank_primary',
-                                   'run', 'fill', 'hover', 'download',
-                                   'userscript', 'spawn'])
+Target = enum.Enum('Target', ['normal', 'current', 'tab', 'tab_fg', 'tab_bg',
+                              'window', 'yank', 'yank_primary', 'run', 'fill',
+                              'hover', 'download', 'userscript', 'spawn'])
 
 
 class HintingError(Exception):
@@ -65,10 +66,10 @@ class HintLabel(QLabel):
 
     STYLESHEET = """
         QLabel {
-            background-color: {{ color['hints.bg'] }};
-            color: {{ color['hints.fg'] }};
-            font: {{ font['hints'] }};
-            border: {{ config.get('hints', 'border') }};
+            background-color: {{ conf.colors.hints.bg }};
+            color: {{ conf.colors.hints.fg }};
+            font: {{ conf.fonts.hints }};
+            border: {{ conf.hints.border }};
             padding-left: -3px;
             padding-right: -3px;
         }
@@ -80,7 +81,7 @@ class HintLabel(QLabel):
         self.elem = elem
 
         self.setAttribute(Qt.WA_StyledBackground, True)
-        style.set_register_stylesheet(self)
+        config.set_register_stylesheet(self)
 
         self._context.tab.contents_size_changed.connect(self._move_to_elem)
         self._move_to_elem()
@@ -100,7 +101,7 @@ class HintLabel(QLabel):
             matched: The part of the text which was typed.
             unmatched: The part of the text which was not typed yet.
         """
-        if (config.get('hints', 'uppercase') and
+        if (config.val.hints.uppercase and
                 self._context.hint_mode in ['letter', 'word']):
             matched = html.escape(matched.upper())
             unmatched = html.escape(unmatched.upper())
@@ -108,7 +109,7 @@ class HintLabel(QLabel):
             matched = html.escape(matched)
             unmatched = html.escape(unmatched)
 
-        match_color = html.escape(config.get('colors', 'hints.fg.match'))
+        match_color = html.escape(config.val.colors.hints.match.fg)
         self.setText('<font color="{}">{}</font>{}'.format(
             match_color, matched, unmatched))
         self.adjustSize()
@@ -121,7 +122,7 @@ class HintLabel(QLabel):
             log.hints.debug("Frame for {!r} vanished!".format(self))
             self.hide()
             return
-        no_js = config.get('hints', 'find-implementation') != 'javascript'
+        no_js = config.val.hints.find_implementation != 'javascript'
         rect = self.elem.rect_on_view(no_js=no_js)
         self.move(rect.x(), rect.y())
 
@@ -131,6 +132,7 @@ class HintLabel(QLabel):
         self.deleteLater()
 
 
+@attr.s
 class HintContext:
 
     """Context namespace used for hinting.
@@ -158,19 +160,18 @@ class HintContext:
         group: The group of web elements to hint.
     """
 
-    def __init__(self):
-        self.all_labels = []
-        self.labels = {}
-        self.target = None
-        self.baseurl = None
-        self.to_follow = None
-        self.rapid = False
-        self.add_history = False
-        self.filterstr = None
-        self.args = []
-        self.tab = None
-        self.group = None
-        self.hint_mode = None
+    all_labels = attr.ib(attr.Factory(list))
+    labels = attr.ib(attr.Factory(dict))
+    target = attr.ib(None)
+    baseurl = attr.ib(None)
+    to_follow = attr.ib(None)
+    rapid = attr.ib(False)
+    add_history = attr.ib(False)
+    filterstr = attr.ib(None)
+    args = attr.ib(attr.Factory(list))
+    tab = attr.ib(None)
+    group = attr.ib(None)
+    hint_mode = attr.ib(None)
 
     def get_args(self, urlstr):
         """Get the arguments, with {hint-url} replaced by the given URL."""
@@ -203,7 +204,7 @@ class HintActions:
             Target.window: usertypes.ClickTarget.window,
             Target.hover: usertypes.ClickTarget.normal,
         }
-        if config.get('tabs', 'background-tabs'):
+        if config.val.tabs.background:
             target_mapping[Target.tab] = usertypes.ClickTarget.tab_bg
         else:
             target_mapping[Target.tab] = usertypes.ClickTarget.tab
@@ -389,8 +390,10 @@ class HintManager(QObject):
 
     def _cleanup(self):
         """Clean up after hinting."""
+        # pylint: disable=not-an-iterable
         for label in self._context.all_labels:
             label.cleanup()
+        # pylint: enable=not-an-iterable
 
         text = self._get_text()
         message_bridge = objreg.get('message-bridge', scope='window',
@@ -421,9 +424,9 @@ class HintManager(QObject):
         if hint_mode == 'number':
             chars = '0123456789'
         else:
-            chars = config.get('hints', 'chars')
-        min_chars = config.get('hints', 'min-chars')
-        if config.get('hints', 'scatter') and hint_mode != 'number':
+            chars = config.val.hints.chars
+        min_chars = config.val.hints.min_chars
+        if config.val.hints.scatter and hint_mode != 'number':
             return self._hint_scattered(min_chars, chars, elems)
         else:
             return self._hint_linear(min_chars, chars, elems)
@@ -603,7 +606,7 @@ class HintManager(QObject):
         modeman.enter(self._win_id, usertypes.KeyMode.hint,
                       'HintManager.start')
 
-        # to make auto-follow == 'always' work
+        # to make auto_follow == 'always' work
         self._handle_auto_follow()
 
     @cmdutils.register(instance='hintmanager', scope='tab', name='hint',
@@ -614,8 +617,10 @@ class HintManager(QObject):
         """Start hinting.
 
         Args:
-            rapid: Whether to do rapid hinting. This is only possible with
-                   targets `tab` (with background-tabs=true), `tab-bg`,
+            rapid: Whether to do rapid hinting. With rapid hinting, the hint
+                   mode isn't left after a hint is followed, so you can easily
+                   open multiple links. This is only possible with targets
+                   `tab` (with `tabs.background_tabs=true`), `tab-bg`,
                    `window`, `run`, `hover`, `userscript` and `spawn`.
             add_history: Whether to add the spawned or yanked link to the
                          browsing history.
@@ -631,7 +636,7 @@ class HintManager(QObject):
                 - `normal`: Open the link.
                 - `current`: Open the link in the current tab.
                 - `tab`: Open the link in a new tab (honoring the
-                         background-tabs setting).
+                         `tabs.background_tabs` setting).
                 - `tab-fg`: Open the link in a new foreground tab.
                 - `tab-bg`: Open the link in a new background tab.
                 - `window`: Open the link in a new window.
@@ -649,7 +654,7 @@ class HintManager(QObject):
             mode: The hinting mode to use.
 
                 - `number`: Use numeric hints.
-                - `letter`: Use the chars in the hints->chars settings.
+                - `letter`: Use the chars in the hints.chars setting.
                 - `word`: Use hint words based on the html elements and the
                           extra words.
 
@@ -684,8 +689,7 @@ class HintManager(QObject):
                           Target.hover, Target.userscript, Target.spawn,
                           Target.download, Target.normal, Target.current]:
                 pass
-            elif (target == Target.tab and
-                  config.get('tabs', 'background-tabs')):
+            elif target == Target.tab and config.val.tabs.background:
                 pass
             else:
                 name = target.name.replace('_', '-')
@@ -693,7 +697,7 @@ class HintManager(QObject):
                                           "target {}!".format(name))
 
         if mode is None:
-            mode = config.get('hints', 'mode')
+            mode = config.val.hints.mode
 
         self._check_args(target, *args)
         self._context = HintContext()
@@ -720,7 +724,7 @@ class HintManager(QObject):
         return self._context.hint_mode
 
     def _handle_auto_follow(self, keystr="", filterstr="", visible=None):
-        """Handle the auto-follow option."""
+        """Handle the auto_follow option."""
         if visible is None:
             visible = {string: label
                        for string, label in self._context.labels.items()
@@ -729,7 +733,7 @@ class HintManager(QObject):
         if len(visible) != 1:
             return
 
-        auto_follow = config.get('hints', 'auto-follow')
+        auto_follow = config.val.hints.auto_follow
 
         if auto_follow == "always":
             follow = True
@@ -746,8 +750,8 @@ class HintManager(QObject):
             self._context.to_follow = list(visible.keys())[0]
 
         if follow:
-            # apply auto-follow-timeout
-            timeout = config.get('hints', 'auto-follow-timeout')
+            # apply auto_follow_timeout
+            timeout = config.val.hints.auto_follow_timeout
             keyparsers = objreg.get('keyparsers', scope='window',
                                     window=self._win_id)
             normal_parser = keyparsers[usertypes.KeyMode.normal]
@@ -771,9 +775,9 @@ class HintManager(QObject):
                     label.show()
                 else:
                     # element doesn't match anymore -> hide it, unless in rapid
-                    # mode and hide-unmatched-rapid-hints is false (see #1799)
+                    # mode and hide_unmatched_rapid_hints is false (see #1799)
                     if (not self._context.rapid or
-                            config.get('hints', 'hide-unmatched-rapid-hints')):
+                            config.val.hints.hide_unmatched_rapid_hints):
                         label.hide()
             except webelem.Error:
                 pass
@@ -793,7 +797,10 @@ class HintManager(QObject):
         else:
             self._context.filterstr = filterstr
 
+        log.hints.debug("Filtering hints on {!r}".format(filterstr))
+
         visible = []
+        # pylint: disable=not-an-iterable
         for label in self._context.all_labels:
             try:
                 if self._filter_matches(filterstr, str(label.elem)):
@@ -805,6 +812,7 @@ class HintManager(QObject):
                     label.hide()
             except webelem.Error:
                 pass
+        # pylint: enable=not-an-iterable
 
         if not visible:
             # Whoops, filtered all hints
@@ -894,7 +902,7 @@ class HintManager(QObject):
         except HintingError as e:
             message.error(str(e))
 
-    @cmdutils.register(instance='hintmanager', scope='tab', hide=True,
+    @cmdutils.register(instance='hintmanager', scope='tab',
                        modes=[usertypes.KeyMode.hint])
     def follow_hint(self, keystring=None):
         """Follow a hint.
@@ -938,7 +946,7 @@ class WordHinter:
 
     def ensure_initialized(self):
         """Generate the used words if yet uninitialized."""
-        dictionary = config.get("hints", "dictionary")
+        dictionary = config.val.hints.dictionary
         if not self.words or self.dictionary != dictionary:
             self.words.clear()
             self.dictionary = dictionary

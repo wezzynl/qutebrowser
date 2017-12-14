@@ -27,10 +27,15 @@ import platform
 import subprocess
 import importlib
 import collections
-import pkg_resources
+import enum
+import datetime
 
+import attr
+import pkg_resources
 from PyQt5.QtCore import PYQT_VERSION_STR, QLibraryInfo
 from PyQt5.QtNetwork import QSslSocket
+from PyQt5.QtGui import (QOpenGLContext, QOpenGLVersionProfile,
+                         QOffscreenSurface)
 from PyQt5.QtWidgets import QApplication
 
 try:
@@ -44,16 +49,23 @@ except ImportError:  # pragma: no cover
     QWebEngineProfile = None
 
 import qutebrowser
-from qutebrowser.utils import log, utils, standarddir, usertypes, qtutils
+from qutebrowser.utils import log, utils, standarddir, usertypes
 from qutebrowser.misc import objects, earlyinit, sql
 from qutebrowser.browser import pdfjs
 
 
-DistributionInfo = collections.namedtuple(
-    'DistributionInfo', ['id', 'parsed', 'version', 'pretty'])
+@attr.s
+class DistributionInfo:
+
+    """Information about the running distribution."""
+
+    id = attr.ib()
+    parsed = attr.ib()
+    version = attr.ib()
+    pretty = attr.ib()
 
 
-Distribution = usertypes.enum(
+Distribution = enum.Enum(
     'Distribution', ['unknown', 'ubuntu', 'debian', 'void', 'arch',
                      'gentoo', 'fedora', 'opensuse', 'linuxmint', 'manjaro'])
 
@@ -140,13 +152,16 @@ def _git_str_subprocess(gitpath):
     if not os.path.isdir(os.path.join(gitpath, ".git")):
         return None
     try:
-        cid = subprocess.check_output(
-            ['git', 'describe', '--tags', '--dirty', '--always'],
-            cwd=gitpath).decode('UTF-8').strip()
-        date = subprocess.check_output(
+        # https://stackoverflow.com/questions/21017300/21017394#21017394
+        commit_hash = subprocess.run(
+            ['git', 'describe', '--match=NeVeRmAtCh', '--always', '--dirty'],
+            cwd=gitpath, check=True,
+            stdout=subprocess.PIPE).stdout.decode('UTF-8').strip()
+        date = subprocess.run(
             ['git', 'show', '-s', '--format=%ci', 'HEAD'],
-            cwd=gitpath).decode('UTF-8').strip()
-        return '{} ({})'.format(cid, date)
+            cwd=gitpath, check=True,
+            stdout=subprocess.PIPE).stdout.decode('UTF-8').strip()
+        return '{} ({})'.format(commit_hash, date)
     except (subprocess.CalledProcessError, OSError):
         return None
 
@@ -190,25 +205,25 @@ def _module_versions():
         ('pygments', ['__version__']),
         ('yaml', ['__version__']),
         ('cssutils', ['__version__']),
-        ('typing', []),
+        ('attr', ['__version__']),
         ('PyQt5.QtWebEngineWidgets', []),
         ('PyQt5.QtWebKitWidgets', []),
     ])
-    for name, attributes in modules.items():
+    for modname, attributes in modules.items():
         try:
-            module = importlib.import_module(name)
+            module = importlib.import_module(modname)
         except ImportError:
-            text = '{}: no'.format(name)
+            text = '{}: no'.format(modname)
         else:
-            for attr in attributes:
+            for name in attributes:
                 try:
-                    text = '{}: {}'.format(name, getattr(module, attr))
+                    text = '{}: {}'.format(modname, getattr(module, name))
                 except AttributeError:
                     pass
                 else:
                     break
             else:
-                text = '{}: yes'.format(name)
+                text = '{}: yes'.format(modname)
         lines.append(text)
     return lines
 
@@ -219,14 +234,17 @@ def _path_info():
     Return:
         A dictionary of descriptive to actual path names.
     """
-    return {
+    info = {
         'config': standarddir.config(),
         'data': standarddir.data(),
-        'system_data': standarddir.system_data(),
         'cache': standarddir.cache(),
-        'download': standarddir.download(),
         'runtime': standarddir.runtime(),
     }
+    if standarddir.config() != standarddir.config(auto=True):
+        info['auto config'] = standarddir.config(auto=True)
+    if standarddir.data() != standarddir.data(system=True):
+        info['system data'] = standarddir.data(system=True)
+    return info
 
 
 def _os_info():
@@ -237,12 +255,12 @@ def _os_info():
     """
     lines = []
     releaseinfo = None
-    if sys.platform == 'linux':
+    if utils.is_linux:
         osver = ''
         releaseinfo = _release_info()
-    elif sys.platform == 'win32':
+    elif utils.is_windows:
         osver = ', '.join(platform.win32_ver())
-    elif sys.platform == 'darwin':
+    elif utils.is_mac:
         release, versioninfo, machine = platform.mac_ver()
         if all(not e for e in versioninfo):
             versioninfo = ''
@@ -301,13 +319,19 @@ def _chromium_version():
 def _backend():
     """Get the backend line with relevant information."""
     if objects.backend == usertypes.Backend.QtWebKit:
-        return '{} (WebKit {})'.format(
-            'QtWebKit-NG' if qtutils.is_qtwebkit_ng() else 'legacy QtWebKit',
-            qWebKitVersion())
+        return 'new QtWebKit (WebKit {})'.format(qWebKitVersion())
     else:
         webengine = usertypes.Backend.QtWebEngine
         assert objects.backend == webengine, objects.backend
         return 'QtWebEngine (Chromium {})'.format(_chromium_version())
+
+
+def _uptime() -> datetime.timedelta:
+    launch_time = QApplication.instance().launch_time
+    time_delta = datetime.datetime.now() - launch_time
+    # Round off microseconds
+    time_delta -= datetime.timedelta(microseconds=time_delta.microseconds)
+    return time_delta
 
 
 def version():
@@ -370,8 +394,13 @@ def version():
         '',
         'Paths:',
     ]
-    for name, path in _path_info().items():
+    for name, path in sorted(_path_info().items()):
         lines += ['{}: {}'.format(name, path)]
+
+    lines += [
+        '',
+        'Uptime: {}'.format(_uptime()),
+    ]
 
     return '\n'.join(lines)
 
@@ -383,10 +412,6 @@ def opengl_vendor():  # pragma: no cover
     'Intel Open Source Technology Center'; or None if the vendor can't be
     determined.
     """
-    # We're doing those imports here because this is only available with Qt 5.4
-    # or newer.
-    from PyQt5.QtGui import (QOpenGLContext, QOpenGLVersionProfile,
-                             QOffscreenSurface)
     assert QApplication.instance()
 
     old_context = QOpenGLContext.currentContext()

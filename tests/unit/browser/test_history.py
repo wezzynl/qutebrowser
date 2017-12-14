@@ -27,11 +27,13 @@ from PyQt5.QtCore import QUrl
 from qutebrowser.browser import history
 from qutebrowser.utils import objreg, urlutils, usertypes
 from qutebrowser.commands import cmdexc
+from qutebrowser.misc import sql
 
 
 @pytest.fixture(autouse=True)
-def prerequisites(config_stub, fake_save_manager, init_sql):
+def prerequisites(config_stub, fake_save_manager, init_sql, fake_args):
     """Make sure everything is ready to initialize a WebHistory."""
+    fake_args.debug_flags = []
     config_stub.data = {'general': {'private-browsing': False}}
 
 
@@ -126,40 +128,48 @@ def test_clear_force(qtbot, tmpdir, hist):
     assert not len(hist.completion)
 
 
-def test_delete_url(hist):
+@pytest.mark.parametrize('raw, escaped', [
+    ('http://example.com/1', 'http://example.com/1'),
+    ('http://example.com/1 2', 'http://example.com/1%202'),
+])
+def test_delete_url(hist, raw, escaped):
     hist.add_url(QUrl('http://example.com/'), atime=0)
-    hist.add_url(QUrl('http://example.com/1'), atime=0)
+    hist.add_url(QUrl(escaped), atime=0)
     hist.add_url(QUrl('http://example.com/2'), atime=0)
 
     before = set(hist)
     completion_before = set(hist.completion)
 
-    hist.delete_url(QUrl('http://example.com/1'))
+    hist.delete_url(QUrl(raw))
 
     diff = before.difference(set(hist))
-    assert diff == {('http://example.com/1', '', 0, False)}
+    assert diff == {(escaped, '', 0, False)}
 
     completion_diff = completion_before.difference(set(hist.completion))
-    assert completion_diff == {('http://example.com/1', '', 0)}
+    assert completion_diff == {(raw, '', 0)}
 
 
-@pytest.mark.parametrize('url, atime, title, redirect, expected_url', [
-    ('http://www.example.com', 12346, 'the title', False,
-        'http://www.example.com'),
-    ('http://www.example.com', 12346, 'the title', True,
-        'http://www.example.com'),
-    ('http://www.example.com/spa ce', 12346, 'the title', False,
-        'http://www.example.com/spa%20ce'),
-    ('https://user:pass@example.com', 12346, 'the title', False,
-        'https://user@example.com'),
-])
-def test_add_url(qtbot, hist, url, atime, title, redirect, expected_url):
+@pytest.mark.parametrize(
+    'url, atime, title, redirect, history_url, completion_url', [
+
+        ('http://www.example.com', 12346, 'the title', False,
+            'http://www.example.com', 'http://www.example.com'),
+        ('http://www.example.com', 12346, 'the title', True,
+            'http://www.example.com', None),
+        ('http://www.example.com/sp ce', 12346, 'the title', False,
+            'http://www.example.com/sp%20ce', 'http://www.example.com/sp ce'),
+        ('https://user:pass@example.com', 12346, 'the title', False,
+            'https://user@example.com', 'https://user@example.com'),
+    ]
+)
+def test_add_url(qtbot, hist, url, atime, title, redirect, history_url,
+                 completion_url):
     hist.add_url(QUrl(url), atime=atime, title=title, redirect=redirect)
-    assert list(hist) == [(expected_url, title, atime, redirect)]
-    if redirect:
+    assert list(hist) == [(history_url, title, atime, redirect)]
+    if completion_url is None:
         assert not len(hist.completion)
     else:
-        assert list(hist.completion) == [(expected_url, title, atime)]
+        assert list(hist.completion) == [(completion_url, title, atime)]
 
 
 def test_add_url_invalid(qtbot, hist, caplog):
@@ -167,6 +177,28 @@ def test_add_url_invalid(qtbot, hist, caplog):
         hist.add_url(QUrl())
     assert not list(hist)
     assert not list(hist.completion)
+
+
+@pytest.mark.parametrize('environmental', [True, False])
+@pytest.mark.parametrize('completion', [True, False])
+def test_add_url_error(monkeypatch, hist, message_mock, caplog,
+                       environmental, completion):
+    def raise_error(url, replace=False):
+        raise sql.SqlError("Error message", environmental=environmental)
+
+    if completion:
+        monkeypatch.setattr(hist.completion, 'insert', raise_error)
+    else:
+        monkeypatch.setattr(hist, 'insert', raise_error)
+
+    if environmental:
+        with caplog.at_level(logging.ERROR):
+            hist.add_url(QUrl('https://www.example.org/'))
+        msg = message_mock.getmsg(usertypes.MessageLevel.error)
+        assert msg.text == "Failed to write history: Error message"
+    else:
+        with pytest.raises(sql.SqlError):
+            hist.add_url(QUrl('https://www.example.org/'))
 
 
 @pytest.mark.parametrize('level, url, req_url, expected', [
@@ -275,6 +307,22 @@ def test_import_txt(hist, data_tmpdir, monkeypatch, stubs):
     assert (data_tmpdir / 'history.bak').exists()
 
 
+def test_import_txt_existing_backup(hist, data_tmpdir, monkeypatch, stubs):
+    monkeypatch.setattr(history, 'QTimer', stubs.InstaTimer)
+    histfile = data_tmpdir / 'history'
+    bakfile = data_tmpdir / 'history.bak'
+    histfile.write('12345 http://example.com/ title')
+    bakfile.write('12346 http://qutebrowser.org/')
+
+    hist.import_txt()
+
+    assert list(hist) == [('http://example.com/', 'title', 12345, False)]
+
+    assert not histfile.exists()
+    assert bakfile.read().split('\n') == ['12346 http://qutebrowser.org/',
+                                          '12345 http://example.com/ title']
+
+
 @pytest.mark.parametrize('line', [
     '',
     '#12345 http://example.com/commented',
@@ -349,3 +397,50 @@ def test_debug_dump_history_nonexistent(hist, tmpdir):
     histfile = tmpdir / 'nonexistent' / 'history'
     with pytest.raises(cmdexc.CommandError):
         hist.debug_dump_history(str(histfile))
+
+
+def test_rebuild_completion(hist):
+    hist.insert({'url': 'example.com/1', 'title': 'example1',
+                 'redirect': False, 'atime': 1})
+    hist.insert({'url': 'example.com/1', 'title': 'example1',
+                 'redirect': False, 'atime': 2})
+    hist.insert({'url': 'example.com/2%203', 'title': 'example2',
+                 'redirect': False, 'atime': 3})
+    hist.insert({'url': 'example.com/3', 'title': 'example3',
+                 'redirect': True, 'atime': 4})
+    hist.insert({'url': 'example.com/2 3', 'title': 'example2',
+                 'redirect': False, 'atime': 5})
+    hist.completion.delete_all()
+
+    hist2 = history.WebHistory()
+    assert list(hist2.completion) == [
+        ('example.com/1', 'example1', 2),
+        ('example.com/2 3', 'example2', 5),
+    ]
+
+
+def test_no_rebuild_completion(hist):
+    """Ensure that completion is not regenerated unless completely empty."""
+    hist.add_url(QUrl('example.com/1'), redirect=False, atime=1)
+    hist.add_url(QUrl('example.com/2'), redirect=False, atime=2)
+    hist.completion.delete('url', 'example.com/2')
+
+    hist2 = history.WebHistory()
+    assert list(hist2.completion) == [('example.com/1', '', 1)]
+
+
+def test_user_version(hist, monkeypatch):
+    """Ensure that completion is regenerated if user_version is incremented."""
+    hist.add_url(QUrl('example.com/1'), redirect=False, atime=1)
+    hist.add_url(QUrl('example.com/2'), redirect=False, atime=2)
+    hist.completion.delete('url', 'example.com/2')
+
+    hist2 = history.WebHistory()
+    assert list(hist2.completion) == [('example.com/1', '', 1)]
+
+    monkeypatch.setattr(history, '_USER_VERSION', history._USER_VERSION + 1)
+    hist3 = history.WebHistory()
+    assert list(hist3.completion) == [
+        ('example.com/1', '', 1),
+        ('example.com/2', '', 2),
+    ]

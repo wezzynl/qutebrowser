@@ -22,44 +22,32 @@
 import inspect
 import collections
 import traceback
+import typing
+
+import attr
 
 from qutebrowser.commands import cmdexc, argparser
-from qutebrowser.utils import (log, utils, message, docutils, objreg,
-                               usertypes, typing)
+from qutebrowser.utils import log, message, docutils, objreg, usertypes
 from qutebrowser.utils import debug as debug_utils
 from qutebrowser.misc import objects
 
 
+@attr.s
 class ArgInfo:
 
     """Information about an argument."""
 
-    def __init__(self, win_id=False, count=False, hide=False, metavar=None,
-                 flag=None, completion=None, choices=None):
-        if win_id and count:
+    win_id = attr.ib(False)
+    count = attr.ib(False)
+    hide = attr.ib(False)
+    metavar = attr.ib(None)
+    flag = attr.ib(None)
+    completion = attr.ib(None)
+    choices = attr.ib(None)
+
+    def __attrs_post_init__(self):
+        if self.win_id and self.count:
             raise TypeError("Argument marked as both count/win_id!")
-        self.win_id = win_id
-        self.count = count
-        self.flag = flag
-        self.hide = hide
-        self.metavar = metavar
-        self.completion = completion
-        self.choices = choices
-
-    def __eq__(self, other):
-        return (self.win_id == other.win_id and
-                self.count == other.count and
-                self.flag == other.flag and
-                self.hide == other.hide and
-                self.metavar == other.metavar and
-                self.completion == other.completion and
-                self.choices == other.choices)
-
-    def __repr__(self):
-        return utils.get_repr(self, win_id=self.win_id, count=self.count,
-                              flag=self.flag, hide=self.hide,
-                              metavar=self.metavar, completion=self.completion,
-                              choices=self.choices, constructor=True)
 
 
 class Command:
@@ -70,7 +58,6 @@ class Command:
         name: The main name of the command.
         maxsplit: The maximum amount of splits to do for the commandline, or
                   None.
-        hide: Whether to hide the arguments or not.
         deprecated: False, or a string to describe why a command is deprecated.
         desc: The description of the command.
         handler: The handler function to call.
@@ -81,47 +68,42 @@ class Command:
         backend: Which backend the command works with (or None if it works with
                  both)
         no_replace_variables: Don't replace variables like {url}
+        modes: The modes the command can be executed in.
         _qute_args: The saved data from @cmdutils.argument
-        _modes: The modes the command can be executed in.
         _count: The count set for the command.
         _instance: The object to bind 'self' to.
         _scope: The scope to get _instance for in the object registry.
     """
 
     def __init__(self, *, handler, name, instance=None, maxsplit=None,
-                 hide=False, modes=None, not_modes=None, debug=False,
-                 ignore_args=False, deprecated=False, no_cmd_split=False,
-                 star_args_optional=False, scope='global', backend=None,
-                 no_replace_variables=False):
-        # I really don't know how to solve this in a better way, I tried.
-        # pylint: disable=too-many-locals
+                 modes=None, not_modes=None, debug=False, deprecated=False,
+                 no_cmd_split=False, star_args_optional=False, scope='global',
+                 backend=None, no_replace_variables=False):
         if modes is not None and not_modes is not None:
             raise ValueError("Only modes or not_modes can be given!")
         if modes is not None:
             for m in modes:
                 if not isinstance(m, usertypes.KeyMode):
                     raise TypeError("Mode {} is no KeyMode member!".format(m))
-            self._modes = set(modes)
+            self.modes = set(modes)
         elif not_modes is not None:
             for m in not_modes:
                 if not isinstance(m, usertypes.KeyMode):
                     raise TypeError("Mode {} is no KeyMode member!".format(m))
-            self._modes = set(usertypes.KeyMode).difference(not_modes)
+            self.modes = set(usertypes.KeyMode).difference(not_modes)
         else:
-            self._modes = set(usertypes.KeyMode)
+            self.modes = set(usertypes.KeyMode)
         if scope != 'global' and instance is None:
             raise ValueError("Setting scope without setting instance makes "
                              "no sense!")
 
         self.name = name
         self.maxsplit = maxsplit
-        self.hide = hide
         self.deprecated = deprecated
         self._instance = instance
         self._scope = scope
         self._star_args_optional = star_args_optional
         self.debug = debug
-        self.ignore_args = ignore_args
         self.handler = handler
         self.no_cmd_split = no_cmd_split
         self.backend = backend
@@ -225,33 +207,31 @@ class Command:
         else:
             self.desc = ""
 
-        if not self.ignore_args:
-            for param in signature.parameters.values():
-                # https://docs.python.org/3/library/inspect.html#inspect.Parameter.kind
-                # "Python has no explicit syntax for defining positional-only
-                # parameters, but many built-in and extension module functions
-                # (especially those that accept only one or two parameters)
-                # accept them."
-                assert param.kind != inspect.Parameter.POSITIONAL_ONLY
-                if param.name == 'self':
-                    continue
-                if self._inspect_special_param(param):
-                    continue
-                if (param.kind == inspect.Parameter.KEYWORD_ONLY and
-                        param.default is inspect.Parameter.empty):
-                    raise TypeError("{}: handler has keyword only argument "
-                                    "{!r} without default!".format(self.name,
-                                                                   param.name))
-                typ = self._get_type(param)
-                is_bool = typ is bool
-                kwargs = self._param_to_argparse_kwargs(param, is_bool)
-                args = self._param_to_argparse_args(param, is_bool)
-                callsig = debug_utils.format_call(
-                    self.parser.add_argument, args, kwargs,
-                    full=False)
-                log.commands.vdebug('Adding arg {} of type {} -> {}'.format(
-                    param.name, typ, callsig))
-                self.parser.add_argument(*args, **kwargs)
+        for param in signature.parameters.values():
+            # https://docs.python.org/3/library/inspect.html#inspect.Parameter.kind
+            # "Python has no explicit syntax for defining positional-only
+            # parameters, but many built-in and extension module functions
+            # (especially those that accept only one or two parameters) accept
+            # them."
+            assert param.kind != inspect.Parameter.POSITIONAL_ONLY
+            if param.name == 'self':
+                continue
+            if self._inspect_special_param(param):
+                continue
+            if (param.kind == inspect.Parameter.KEYWORD_ONLY and
+                    param.default is inspect.Parameter.empty):
+                raise TypeError("{}: handler has keyword only argument {!r} "
+                                "without default!".format(
+                                    self.name, param.name))
+            typ = self._get_type(param)
+            is_bool = typ is bool
+            kwargs = self._param_to_argparse_kwargs(param, is_bool)
+            args = self._param_to_argparse_args(param, is_bool)
+            callsig = debug_utils.format_call(self.parser.add_argument, args,
+                                              kwargs, full=False)
+            log.commands.vdebug('Adding arg {} of type {} -> {}'.format(
+                param.name, typ, callsig))
+            self.parser.add_argument(*args, **kwargs)
         return signature.parameters.values()
 
     def _param_to_argparse_kwargs(self, param, is_bool):
@@ -419,9 +399,10 @@ class Command:
             # support that.
             # pylint: disable=no-member,useless-suppression
             try:
-                types = list(typ.__union_params__)
-            except AttributeError:
                 types = list(typ.__args__)
+            except AttributeError:
+                # Older Python 3.5 patch versions
+                types = list(typ.__union_params__)
             # pylint: enable=no-member,useless-suppression
             if param.default is not inspect.Parameter.empty:
                 types.append(type(param.default))
@@ -452,12 +433,6 @@ class Command:
         args = []
         kwargs = {}
         signature = inspect.signature(self.handler)
-
-        if self.ignore_args:
-            if self._instance is not None:
-                param = list(signature.parameters.values())[0]
-                self._get_self_arg(win_id, param, args)
-            return args, kwargs
 
         for i, param in enumerate(signature.parameters.values()):
             arg_info = self.get_arg_info(param)
@@ -530,8 +505,12 @@ class Command:
         Args:
             mode: The usertypes.KeyMode to check.
         """
-        if mode not in self._modes:
-            mode_names = '/'.join(sorted(m.name for m in self._modes))
+        if mode not in self.modes:
+            mode_names = '/'.join(sorted(m.name for m in self.modes))
             raise cmdexc.PrerequisitesError(
                 "{}: This command is only allowed in {} mode, not {}.".format(
                     self.name, mode_names, mode.name))
+
+    def takes_count(self):
+        """Return true iff this command can take a count argument."""
+        return any(arg.count for arg in self._qute_args)

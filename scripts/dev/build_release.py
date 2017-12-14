@@ -26,6 +26,7 @@ import sys
 import glob
 import os.path
 import shutil
+import plistlib
 import subprocess
 import argparse
 import tarfile
@@ -49,7 +50,7 @@ def call_script(name, *args, python=sys.executable):
         python: The python interpreter to use.
     """
     path = os.path.join(os.path.dirname(__file__), os.pardir, name)
-    subprocess.check_call([python, path] + list(args))
+    subprocess.run([python, path] + list(args), check=True)
 
 
 def call_tox(toxenv, *args, python=sys.executable):
@@ -63,9 +64,9 @@ def call_tox(toxenv, *args, python=sys.executable):
     env = os.environ.copy()
     env['PYTHON'] = python
     env['PATH'] = os.environ['PATH'] + os.pathsep + os.path.dirname(python)
-    subprocess.check_call(
+    subprocess.run(
         [sys.executable, '-m', 'tox', '-vv', '-e', toxenv] + list(args),
-        env=env)
+        env=env, check=True)
 
 
 def run_asciidoc2html(args):
@@ -88,8 +89,9 @@ def _maybe_remove(path):
 
 def smoke_test(executable):
     """Try starting the given qutebrowser executable."""
-    subprocess.check_call([executable, '--no-err-windows', '--nowindow',
-                           '--temp-basedir', 'about:blank', ':later 500 quit'])
+    subprocess.run([executable, '--no-err-windows', '--nowindow',
+                    '--temp-basedir', 'about:blank', ':later 500 quit'],
+                   check=True)
 
 
 def patch_mac_app():
@@ -100,7 +102,7 @@ def patch_mac_app():
     app_path = os.path.join('dist', 'qutebrowser.app')
     qtwe_core_dir = os.path.join('.tox', 'pyinstaller', 'lib', 'python3.6',
                                  'site-packages', 'PyQt5', 'Qt', 'lib',
-                                 'QtWebengineCore.framework')
+                                 'QtWebEngineCore.framework')
     # Copy QtWebEngineProcess.app
     proc_app = 'QtWebEngineProcess.app'
     shutil.copytree(os.path.join(qtwe_core_dir, 'Helpers', proc_app),
@@ -123,6 +125,40 @@ def patch_mac_app():
         os.symlink(os.path.join(os.pardir, os.pardir, os.pardir, 'Contents',
                                 'MacOS', lib),
                    os.path.join(dest, lib))
+    # Patch Info.plist - pyinstaller's options are too limiting
+    plist_path = os.path.join(app_path, 'Contents', 'Info.plist')
+    with open(plist_path, "rb") as f:
+        plist_data = plistlib.load(f)
+    plist_data.update(INFO_PLIST_UPDATES)
+    with open(plist_path, "wb") as f:
+        plistlib.dump(plist_data, f)
+
+
+INFO_PLIST_UPDATES = {
+    'CFBundleVersion': qutebrowser.__version__,
+    'CFBundleShortVersionString': qutebrowser.__version__,
+    'NSSupportsAutomaticGraphicsSwitching': True,
+    'NSHighResolutionCapable': True,
+    'CFBundleURLTypes': [{
+        "CFBundleURLName": "http(s) URL",
+        "CFBundleURLSchemes": ["http", "https"]
+    }, {
+        "CFBundleURLName": "local file URL",
+        "CFBundleURLSchemes": ["file"]
+    }],
+    'CFBundleDocumentTypes': [{
+        "CFBundleTypeExtensions": ["html", "htm"],
+        "CFBundleTypeMIMETypes": ["text/html"],
+        "CFBundleTypeName": "HTML document",
+        "CFBundleTypeOSTypes": ["HTML"],
+        "CFBundleTypeRole": "Viewer",
+    }, {
+        "CFBundleTypeExtensions": ["xhtml"],
+        "CFBundleTypeMIMETypes": ["text/xhtml"],
+        "CFBundleTypeName": "XHTML document",
+        "CFBundleTypeRole": "Viewer",
+    }]
+}
 
 
 def build_mac():
@@ -143,7 +179,7 @@ def build_mac():
     utils.print_title("Patching .app")
     patch_mac_app()
     utils.print_title("Building .dmg")
-    subprocess.check_call(['make', '-f', 'scripts/dev/Makefile-dmg'])
+    subprocess.run(['make', '-f', 'scripts/dev/Makefile-dmg'], check=True)
 
     dmg_name = 'qutebrowser-{}.dmg'.format(qutebrowser.__version__)
     os.rename('qutebrowser.dmg', dmg_name)
@@ -152,14 +188,14 @@ def build_mac():
 
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
-            subprocess.check_call(['hdiutil', 'attach', dmg_name,
-                                   '-mountpoint', tmpdir])
+            subprocess.run(['hdiutil', 'attach', dmg_name,
+                            '-mountpoint', tmpdir], check=True)
             try:
                 binary = os.path.join(tmpdir, 'qutebrowser.app', 'Contents',
                                       'MacOS', 'qutebrowser')
                 smoke_test(binary)
             finally:
-                subprocess.call(['hdiutil', 'detach', tmpdir])
+                subprocess.run(['hdiutil', 'detach', tmpdir])
     except PermissionError as e:
         print("Failed to remove tempdir: {}".format(e))
 
@@ -207,13 +243,13 @@ def build_windows():
     patch_windows(out_64)
 
     utils.print_title("Building installers")
-    subprocess.check_call(['makensis.exe',
-                           '/DVERSION={}'.format(qutebrowser.__version__),
-                           'misc/qutebrowser.nsi'])
-    subprocess.check_call(['makensis.exe',
-                           '/DX64',
-                           '/DVERSION={}'.format(qutebrowser.__version__),
-                           'misc/qutebrowser.nsi'])
+    subprocess.run(['makensis.exe',
+                    '/DVERSION={}'.format(qutebrowser.__version__),
+                    'misc/qutebrowser.nsi'], check=True)
+    subprocess.run(['makensis.exe',
+                    '/DX64',
+                    '/DVERSION={}'.format(qutebrowser.__version__),
+                    'misc/qutebrowser.nsi'], check=True)
 
     name_32 = 'qutebrowser-{}-win32.exe'.format(qutebrowser.__version__)
     name_64 = 'qutebrowser-{}-amd64.exe'.format(qutebrowser.__version__)
@@ -257,12 +293,12 @@ def build_sdist():
 
     _maybe_remove('dist')
 
-    subprocess.check_call([sys.executable, 'setup.py', 'sdist'])
+    subprocess.run([sys.executable, 'setup.py', 'sdist'], check=True)
     dist_files = os.listdir(os.path.abspath('dist'))
     assert len(dist_files) == 1
 
     dist_file = os.path.join('dist', dist_files[0])
-    subprocess.check_call(['gpg', '--detach-sign', '-a', dist_file])
+    subprocess.run(['gpg', '--detach-sign', '-a', dist_file], check=True)
 
     tar = tarfile.open(dist_file)
     by_ext = collections.defaultdict(list)
@@ -331,7 +367,7 @@ def github_upload(artifacts, tag):
 def pypi_upload(artifacts):
     """Upload the given artifacts to PyPI using twine."""
     filenames = [a[0] for a in artifacts]
-    subprocess.check_call(['twine', 'upload'] + filenames)
+    subprocess.run(['twine', 'upload'] + filenames, check=True)
 
 
 def main():
@@ -353,6 +389,7 @@ def main():
         import github3  # pylint: disable=unused-variable
         read_github_token()
 
+    run_asciidoc2html(args)
     if os.name == 'nt':
         if sys.maxsize > 2**32:
             # WORKAROUND
@@ -362,10 +399,8 @@ def main():
             print("See http://bugs.python.org/issue24493 and ")
             print("https://github.com/pypa/virtualenv/issues/774")
             sys.exit(1)
-        run_asciidoc2html(args)
         artifacts = build_windows()
     elif sys.platform == 'darwin':
-        run_asciidoc2html(args)
         artifacts = build_mac()
     else:
         artifacts = build_sdist()
@@ -377,6 +412,11 @@ def main():
         github_upload(artifacts, args.upload[0])
         if upload_to_pypi:
             pypi_upload(artifacts)
+    else:
+        print()
+        utils.print_title("Artifacts")
+        for artifact in artifacts:
+            print(artifact)
 
 
 if __name__ == '__main__':

@@ -20,10 +20,10 @@
 """Command dispatcher for TabbedBrowser."""
 
 import os
-import sys
 import os.path
 import shlex
 import functools
+import typing
 
 from PyQt5.QtWidgets import QApplication, QTabBar, QDialog
 from PyQt5.QtCore import Qt, QUrl, QEvent, QUrlQuery
@@ -34,15 +34,16 @@ import pygments.lexers
 import pygments.formatters
 
 from qutebrowser.commands import userscripts, cmdexc, cmdutils, runners
-from qutebrowser.config import config, configexc
+from qutebrowser.config import config, configdata
 from qutebrowser.browser import (urlmarks, browsertab, inspector, navigate,
                                  webelem, downloads)
 from qutebrowser.keyinput import modeman
 from qutebrowser.utils import (message, usertypes, log, qtutils, urlutils,
-                               objreg, utils, typing, debug)
+                               objreg, utils, debug)
 from qutebrowser.utils.usertypes import KeyMode
 from qutebrowser.misc import editor, guiprocess
 from qutebrowser.completion.models import urlmodel, miscmodels
+from qutebrowser.mainwindow import mainwindow
 
 
 class CommandDispatcher:
@@ -70,7 +71,6 @@ class CommandDispatcher:
 
     def _new_tabbed_browser(self, private):
         """Get a tabbed-browser from a new window."""
-        from qutebrowser.mainwindow import mainwindow
         new_window = mainwindow.MainWindow(private=private)
         new_window.show()
         return new_window.tabbed_browser
@@ -111,7 +111,7 @@ class CommandDispatcher:
         return widget
 
     def _open(self, url, tab=False, background=False, window=False,
-              explicit=True, private=None):
+              related=False, private=None):
         """Helper function to open a page.
 
         Args:
@@ -132,9 +132,9 @@ class CommandDispatcher:
             tabbed_browser = self._new_tabbed_browser(private)
             tabbed_browser.tabopen(url)
         elif tab:
-            tabbed_browser.tabopen(url, background=False, explicit=explicit)
+            tabbed_browser.tabopen(url, background=False, related=related)
         elif background:
-            tabbed_browser.tabopen(url, background=True, explicit=explicit)
+            tabbed_browser.tabopen(url, background=True, related=related)
         else:
             widget = self._current_widget()
             widget.openurl(url)
@@ -179,7 +179,7 @@ class CommandDispatcher:
             prev: Force selecting the tab before the current tab.
             next_: Force selecting the tab after the current tab.
             opposite: Force selecting the tab in the opposite direction of
-                      what's configured in 'tabs->select-on-remove'.
+                      what's configured in 'tabs.select_on_remove'.
 
         Return:
             QTabBar.SelectLeftTab, QTabBar.SelectRightTab, or None if no change
@@ -191,17 +191,17 @@ class CommandDispatcher:
         elif next_:
             return QTabBar.SelectRightTab
         elif opposite:
-            conf_selection = config.get('tabs', 'select-on-remove')
+            conf_selection = config.val.tabs.select_on_remove
             if conf_selection == QTabBar.SelectLeftTab:
                 return QTabBar.SelectRightTab
             elif conf_selection == QTabBar.SelectRightTab:
                 return QTabBar.SelectLeftTab
             elif conf_selection == QTabBar.SelectPreviousTab:
                 raise cmdexc.CommandError(
-                    "-o is not supported with 'tabs->select-on-remove' set to "
+                    "-o is not supported with 'tabs.select_on_remove' set to "
                     "'last-used'!")
             else:  # pragma: no cover
-                raise ValueError("Invalid select-on-remove value "
+                raise ValueError("Invalid select_on_remove value "
                                  "{!r}!".format(conf_selection))
         return None
 
@@ -213,7 +213,7 @@ class CommandDispatcher:
             prev: Force selecting the tab before the current tab.
             next_: Force selecting the tab after the current tab.
             opposite: Force selecting the tab in the opposite direction of
-                      what's configured in 'tabs->select-on-remove'.
+                      what's configured in 'tabs.select_on_remove'.
             count: The tab index to close, or None
         """
         tabbar = self._tabbed_browser.tabBar()
@@ -238,7 +238,7 @@ class CommandDispatcher:
             prev: Force selecting the tab before the current tab.
             next_: Force selecting the tab after the current tab.
             opposite: Force selecting the tab in the opposite direction of
-                      what's configured in 'tabs->select-on-remove'.
+                      what's configured in 'tabs.select_on_remove'.
             force: Avoid confirmation for pinned tabs.
             count: The tab index to close, or None
         """
@@ -256,7 +256,7 @@ class CommandDispatcher:
     def tab_pin(self, count=None):
         """Pin/Unpin the current/[count]th tab.
 
-        Pinning a tab shrinks it to tabs->pinned-width size.
+        Pinning a tab shrinks it to the size of its title text.
         Attempting to close a pinned tab will cause a confirmation,
         unless --force is passed.
 
@@ -274,7 +274,7 @@ class CommandDispatcher:
                        maxsplit=0, scope='window')
     @cmdutils.argument('url', completion=urlmodel.url)
     @cmdutils.argument('count', count=True)
-    def openurl(self, url=None, implicit=False,
+    def openurl(self, url=None, related=False,
                 bg=False, tab=False, window=False, count=None, secure=False,
                 private=False):
         """Open a URL in the current/[count]th tab.
@@ -286,14 +286,14 @@ class CommandDispatcher:
             bg: Open in a new background tab.
             tab: Open in a new tab.
             window: Open in a new window.
-            implicit: If opening a new tab, treat the tab as implicit (like
-                      clicking on a link).
+            related: If opening a new tab, position the tab as related to the
+                     current one (like clicking on a link).
             count: The tab index to open the URL in, or None.
             secure: Force HTTPS.
             private: Open a new window in private browsing mode.
         """
         if url is None:
-            urls = [config.get('general', 'default-page')]
+            urls = [config.val.url.default_page]
         else:
             urls = self._parse_url_input(url)
 
@@ -305,7 +305,7 @@ class CommandDispatcher:
                 bg = True
 
             if tab or bg or window or private:
-                self._open(cur_url, tab, bg, window, explicit=not implicit,
+                self._open(cur_url, tab, bg, window, related=related,
                            private=private)
             else:
                 curtab = self._cntwidget(count)
@@ -353,6 +353,10 @@ class CommandDispatcher:
         Return:
             A list of URLs that can be opened.
         """
+        if isinstance(url, QUrl):
+            yield url
+            return
+
         force_search = False
         urllist = [u for u in url.split('\n') if u.strip()]
         if (len(urllist) > 1 and not urlutils.is_url(urllist[0]) and
@@ -429,7 +433,7 @@ class CommandDispatcher:
             tab.printing.to_printer(diag.printer(), print_callback)
 
         diag = QPrintDialog(tab)
-        if sys.platform == 'darwin':
+        if utils.is_mac:
             # For some reason we get a segfault when using open() on macOS
             ret = diag.exec_()
             if ret == QDialog.Accepted:
@@ -490,7 +494,7 @@ class CommandDispatcher:
             raise cmdexc.CommandError(e)
 
         # The new tab could be in a new tabbed_browser (e.g. because of
-        # tabs-are-windows being set)
+        # tabs.tabs_are_windows being set)
         if window:
             new_tabbed_browser = self._new_tabbed_browser(
                 private=self._tabbed_browser.private)
@@ -502,9 +506,9 @@ class CommandDispatcher:
         idx = new_tabbed_browser.indexOf(newtab)
 
         new_tabbed_browser.set_page_title(idx, cur_title)
-        if config.get('tabs', 'show-favicons'):
+        if config.val.tabs.favicons.show:
             new_tabbed_browser.setTabIcon(idx, curtab.icon())
-            if config.get('tabs', 'tabs-are-windows'):
+            if config.val.tabs.tabs_are_windows:
                 new_tabbed_browser.window().setWindowIcon(curtab.icon())
 
         newtab.data.keep_icon = True
@@ -514,14 +518,58 @@ class CommandDispatcher:
         return newtab
 
     @cmdutils.register(instance='command-dispatcher', scope='window')
+    @cmdutils.argument('index', completion=miscmodels.buffer)
+    def tab_take(self, index):
+        """Take a tab from another window.
+
+        Args:
+            index: The [win_id/]index of the tab to take. Or a substring
+                   in which case the closest match will be taken.
+        """
+        tabbed_browser, tab = self._resolve_buffer_index(index)
+
+        if tabbed_browser is self._tabbed_browser:
+            raise cmdexc.CommandError("Can't take a tab from the same window")
+
+        self._open(tab.url(), tab=True)
+        tabbed_browser.close_tab(tab, add_undo=False)
+
+    @cmdutils.register(instance='command-dispatcher', scope='window')
+    @cmdutils.argument('win_id', completion=miscmodels.window)
+    def tab_give(self, win_id: int = None):
+        """Give the current tab to a new or existing window if win_id given.
+
+        If no win_id is given, the tab will get detached into a new window.
+
+        Args:
+            win_id: The window ID of the window to give the current tab to.
+        """
+        if win_id == self._win_id:
+            raise cmdexc.CommandError("Can't give a tab to the same window")
+
+        if win_id is None:
+            if self._count() < 2:
+                raise cmdexc.CommandError("Cannot detach from a window with "
+                                          "only one tab")
+
+            tabbed_browser = self._new_tabbed_browser(
+                private=self._tabbed_browser.private)
+        else:
+            if win_id not in objreg.window_registry:
+                raise cmdexc.CommandError(
+                    "There's no window with id {}!".format(win_id))
+
+            tabbed_browser = objreg.get('tabbed-browser', scope='window',
+                                        window=win_id)
+
+        tabbed_browser.tabopen(self._current_url())
+        self._tabbed_browser.close_tab(self._current_widget(), add_undo=False)
+
+    @cmdutils.register(instance='command-dispatcher', scope='window',
+                       deprecated='Use :tab-give instead!')
     def tab_detach(self):
-        """Detach the current tab to its own window."""
-        if self._count() < 2:
-            raise cmdexc.CommandError("Cannot detach one tab.")
-        url = self._current_url()
-        self._open(url, window=True)
-        cur_widget = self._current_widget()
-        self._tabbed_browser.close_tab(cur_widget, add_undo=False)
+        """Deprecated way to detach a tab."""
+        self.tab_give()
 
     def _back_forward(self, tab, bg, window, count, forward):
         """Helper function for :back/:forward."""
@@ -622,15 +670,14 @@ class CommandDispatcher:
                         tab=tab, background=bg, window=window)
             elif where in ['up', 'increment', 'decrement']:
                 new_url = handlers[where](url, count)
-                self._open(new_url, tab, bg, window, explicit=False)
+                self._open(new_url, tab, bg, window, related=True)
             else:  # pragma: no cover
                 raise ValueError("Got called with invalid value {} for "
                                 "`where'.".format(where))
         except navigate.Error as e:
             raise cmdexc.CommandError(e)
 
-    @cmdutils.register(instance='command-dispatcher', hide=True,
-                       scope='window')
+    @cmdutils.register(instance='command-dispatcher', scope='window')
     @cmdutils.argument('count', count=True)
     def scroll_px(self, dx: int, dy: int, count=1):
         """Scroll the current tab by 'count * dx/dy' pixels.
@@ -646,8 +693,7 @@ class CommandDispatcher:
         cmdutils.check_overflow(dy, 'int')
         self._current_widget().scroller.delta(dx, dy)
 
-    @cmdutils.register(instance='command-dispatcher', hide=True,
-                       scope='window')
+    @cmdutils.register(instance='command-dispatcher', scope='window')
     @cmdutils.argument('count', count=True)
     def scroll(self, direction: typing.Union[str, int], count=1):
         """Scroll the current tab in the given direction.
@@ -684,11 +730,10 @@ class CommandDispatcher:
         else:
             func(count=count)
 
-    @cmdutils.register(instance='command-dispatcher', hide=True,
-                       scope='window')
+    @cmdutils.register(instance='command-dispatcher', scope='window')
     @cmdutils.argument('count', count=True)
     @cmdutils.argument('horizontal', flag='x')
-    def scroll_perc(self, perc: float = None, horizontal=False, count=None):
+    def scroll_to_perc(self, perc: float = None, horizontal=False, count=None):
         """Scroll to a specific percentage of the page.
 
         The percentage can be given either as argument or as count.
@@ -716,8 +761,7 @@ class CommandDispatcher:
 
         self._current_widget().scroller.to_perc(x, y)
 
-    @cmdutils.register(instance='command-dispatcher', hide=True,
-                       scope='window')
+    @cmdutils.register(instance='command-dispatcher', scope='window')
     @cmdutils.argument('count', count=True)
     @cmdutils.argument('top_navigate', metavar='ACTION',
                        choices=('prev', 'decrement'))
@@ -766,12 +810,12 @@ class CommandDispatcher:
             flags |= QUrl.FullyEncoded
         url = QUrl(self._current_url())
         url_query = QUrlQuery()
-        url_query_str = url.query()
+        url_query_str = urlutils.query_string(url)
         if '&' not in url_query_str and ';' in url_query_str:
             url_query.setQueryDelimiters('=', ';')
         url_query.setQuery(url_query_str)
         for key in dict(url_query.queryItems()):
-            if key in config.get('general', 'yank-ignored-url-parameters'):
+            if key in config.val.url.yank_ignored_parameters:
                 url_query.removeQueryItem(key)
         url.setQuery(url_query)
         return url.toString(flags)
@@ -842,7 +886,7 @@ class CommandDispatcher:
             perc = tab.zoom.offset(count)
         except ValueError as e:
             raise cmdexc.CommandError(e)
-        message.info("Zoom level: {}%".format(perc), replace=True)
+        message.info("Zoom level: {}%".format(int(perc)), replace=True)
 
     @cmdutils.register(instance='command-dispatcher', scope='window')
     @cmdutils.argument('count', count=True)
@@ -857,7 +901,7 @@ class CommandDispatcher:
             perc = tab.zoom.offset(-count)
         except ValueError as e:
             raise cmdexc.CommandError(e)
-        message.info("Zoom level: {}%".format(perc), replace=True)
+        message.info("Zoom level: {}%".format(int(perc)), replace=True)
 
     @cmdutils.register(instance='command-dispatcher', scope='window')
     @cmdutils.argument('count', count=True)
@@ -881,14 +925,14 @@ class CommandDispatcher:
 
         level = count if count is not None else zoom
         if level is None:
-            level = config.get('ui', 'default-zoom')
+            level = config.val.zoom.default
         tab = self._current_widget()
 
         try:
             tab.zoom.set_factor(float(level) / 100)
         except ValueError:
             raise cmdexc.CommandError("Can't zoom {}%!".format(level))
-        message.info("Zoom level: {}%".format(level), replace=True)
+        message.info("Zoom level: {}%".format(int(level)), replace=True)
 
     @cmdutils.register(instance='command-dispatcher', scope='window')
     def tab_only(self, prev=False, next_=False, force=False):
@@ -920,13 +964,15 @@ class CommandDispatcher:
                             prev=prev, next_=next_, force=True))
                     return
 
+        first_tab = True
         for i, tab in enumerate(self._tabbed_browser.widgets()):
             if _to_close(i):
-                self._tabbed_browser.close_tab(tab)
+                self._tabbed_browser.close_tab(tab, new_undo=first_tab)
+                first_tab = False
 
     @cmdutils.register(instance='command-dispatcher', scope='window')
     def undo(self):
-        """Re-open a closed tab."""
+        """Re-open the last closed tab or tabs."""
         try:
             self._tabbed_browser.undo()
         except IndexError:
@@ -947,7 +993,7 @@ class CommandDispatcher:
         newidx = self._current_index() - count
         if newidx >= 0:
             self._set_current_index(newidx)
-        elif config.get('tabs', 'wrap'):
+        elif config.val.tabs.wrap:
             self._set_current_index(newidx % self._count())
         else:
             raise cmdexc.CommandError("First tab")
@@ -967,57 +1013,16 @@ class CommandDispatcher:
         newidx = self._current_index() + count
         if newidx < self._count():
             self._set_current_index(newidx)
-        elif config.get('tabs', 'wrap'):
+        elif config.val.tabs.wrap:
             self._set_current_index(newidx % self._count())
         else:
             raise cmdexc.CommandError("Last tab")
 
-    @cmdutils.register(instance='command-dispatcher', scope='window',
-                       deprecated="Use :open {clipboard}")
-    def paste(self, sel=False, tab=False, bg=False, window=False):
-        """Open a page from the clipboard.
-
-        If the pasted text contains newlines, each line gets opened in its own
-        tab.
+    def _resolve_buffer_index(self, index):
+        """Resolve a buffer index to the tabbedbrowser and tab.
 
         Args:
-            sel: Use the primary selection instead of the clipboard.
-            tab: Open in a new tab.
-            bg: Open in a background tab.
-            window: Open in new window.
-        """
-        force_search = False
-        if not utils.supports_selection():
-            sel = False
-        try:
-            text = utils.get_clipboard(selection=sel)
-        except utils.ClipboardError as e:
-            raise cmdexc.CommandError(e)
-        text_urls = [u for u in text.split('\n') if u.strip()]
-        if (len(text_urls) > 1 and not urlutils.is_url(text_urls[0]) and
-            urlutils.get_path_if_valid(
-                text_urls[0], check_exists=True) is None):
-            force_search = True
-            text_urls = [text]
-        for i, text_url in enumerate(text_urls):
-            if not window and i > 0:
-                tab = False
-                bg = True
-            try:
-                url = urlutils.fuzzy_url(text_url, force_search=force_search)
-            except urlutils.InvalidUrlError as e:
-                raise cmdexc.CommandError(e)
-            self._open(url, tab, bg, window)
-
-    @cmdutils.register(instance='command-dispatcher', scope='window')
-    @cmdutils.argument('index', completion=miscmodels.buffer)
-    def buffer(self, index):
-        """Select tab by index or url/title best match.
-
-        Focuses window if necessary.
-
-        Args:
-            index: The [win_id/]index of the tab to focus. Or a substring
+            index: The [win_id/]index of the tab to be selected. Or a substring
                    in which case the closest match will be focused.
         """
         index_parts = index.split('/', 1)
@@ -1057,15 +1062,41 @@ class CommandDispatcher:
             raise cmdexc.CommandError(
                 "There's no tab with index {}!".format(idx))
 
-        window = objreg.window_registry[win_id]
+        return (tabbed_browser, tabbed_browser.widget(idx-1))
+
+    @cmdutils.register(instance='command-dispatcher', scope='window',
+                       maxsplit=0)
+    @cmdutils.argument('index', completion=miscmodels.buffer)
+    @cmdutils.argument('count', count=True)
+    def buffer(self, index=None, count=None):
+        """Select tab by index or url/title best match.
+
+        Focuses window if necessary when index is given. If both index and
+        count are given, use count.
+
+        Args:
+            index: The [win_id/]index of the tab to focus. Or a substring
+                   in which case the closest match will be focused.
+            count: The tab index to focus, starting with 1.
+        """
+        if count is None and index is None:
+            raise cmdexc.CommandError("buffer: Either a count or the argument "
+                                      "index must be specified.")
+
+        if count is not None:
+            index = str(count)
+
+        tabbed_browser, tab = self._resolve_buffer_index(index)
+
+        window = tabbed_browser.window()
         window.activateWindow()
         window.raise_()
-        tabbed_browser.setCurrentIndex(idx-1)
+        tabbed_browser.setCurrentWidget(tab)
 
     @cmdutils.register(instance='command-dispatcher', scope='window')
     @cmdutils.argument('index', choices=['last'])
     @cmdutils.argument('count', count=True)
-    def tab_focus(self, index: typing.Union[str, int]=None, count=None):
+    def tab_focus(self, index: typing.Union[str, int] = None, count=None):
         """Select the tab given as argument/[count].
 
         If neither count nor index are given, it behaves like tab-next.
@@ -1102,7 +1133,7 @@ class CommandDispatcher:
     @cmdutils.register(instance='command-dispatcher', scope='window')
     @cmdutils.argument('index', choices=['+', '-'])
     @cmdutils.argument('count', count=True)
-    def tab_move(self, index: typing.Union[str, int]=None, count=None):
+    def tab_move(self, index: typing.Union[str, int] = None, count=None):
         """Move the current tab according to the argument and [count].
 
         If neither is given, move it to the first position.
@@ -1124,7 +1155,7 @@ class CommandDispatcher:
             elif index == '+':  # pragma: no branch
                 new_idx += delta
 
-            if config.get('tabs', 'wrap'):
+            if config.val.tabs.wrap:
                 new_idx %= self._count()
         else:
             # absolute moving
@@ -1186,7 +1217,7 @@ class CommandDispatcher:
     @cmdutils.register(instance='command-dispatcher', scope='window')
     def home(self):
         """Open main startpage in current tab."""
-        self.openurl(config.get('general', 'startpage')[0])
+        self.openurl(config.val.url.start_pages[0])
 
     def _run_userscript(self, cmd, *args, verbose=False):
         """Run a userscript given as argument.
@@ -1353,8 +1384,7 @@ class CommandDispatcher:
         except KeyError:
             raise cmdexc.CommandError("Bookmark '{}' not found!".format(url))
 
-    @cmdutils.register(instance='command-dispatcher', hide=True,
-                       scope='window')
+    @cmdutils.register(instance='command-dispatcher', scope='window')
     def follow_selected(self, *, tab=False):
         """Follow the selected text.
 
@@ -1458,8 +1488,6 @@ class CommandDispatcher:
     @cmdutils.register(instance='command-dispatcher', scope='window')
     def view_source(self):
         """Show the source of the current page in a new tab."""
-        # pylint: disable=no-member
-        # WORKAROUND for https://bitbucket.org/logilab/pylint/issue/491/
         tab = self._current_widget()
         if tab.data.viewing_source:
             raise cmdexc.CommandError("Already viewing source!")
@@ -1472,10 +1500,13 @@ class CommandDispatcher:
 
         def show_source_cb(source):
             """Show source as soon as it's ready."""
+            # WORKAROUND for https://github.com/PyCQA/pylint/issues/491
+            # pylint: disable=no-member
             lexer = pygments.lexers.HtmlLexer()
             formatter = pygments.formatters.HtmlFormatter(
                 full=True, linenos='table',
                 title='Source for {}'.format(current_url.toDisplayString()))
+            # pylint: enable=no-member
             highlighted = pygments.highlight(source, lexer, formatter)
 
             new_tab = self._tabbed_browser.tabopen()
@@ -1532,7 +1563,7 @@ class CommandDispatcher:
             topic: The topic to show help for.
 
                    - :__command__ for commands.
-                   - __section__\->__option__ for settings.
+                   - __section__.__option__ for settings.
         """
         if topic is None:
             path = 'index.html'
@@ -1542,20 +1573,8 @@ class CommandDispatcher:
                 raise cmdexc.CommandError("Invalid command {}!".format(
                     command))
             path = 'commands.html#{}'.format(command)
-        elif '->' in topic:
-            parts = topic.split('->')
-            if len(parts) != 2:
-                raise cmdexc.CommandError("Invalid help topic {}!".format(
-                    topic))
-            try:
-                config.get(*parts)
-            except configexc.NoSectionError:
-                raise cmdexc.CommandError("Invalid section {}!".format(
-                    parts[0]))
-            except configexc.NoOptionError:
-                raise cmdexc.CommandError("Invalid option {}!".format(
-                    parts[1]))
-            path = 'settings.html#{}'.format(topic.replace('->', '-'))
+        elif topic in configdata.DATA:
+            path = 'settings.html#{}'.format(topic)
         else:
             raise cmdexc.CommandError("Invalid help topic {}!".format(topic))
         url = QUrl('qute://help/{}'.format(path))
@@ -1597,18 +1616,19 @@ class CommandDispatcher:
             return
         assert isinstance(text, str), text
 
+        caret_position = elem.caret_position()
+
         ed = editor.ExternalEditor(self._tabbed_browser)
         ed.editing_finished.connect(functools.partial(
             self.on_editing_finished, elem))
-        ed.edit(text)
+        ed.edit(text, caret_position)
 
-    @cmdutils.register(instance='command-dispatcher', hide=True,
-                       scope='window')
+    @cmdutils.register(instance='command-dispatcher', scope='window')
     def open_editor(self):
         """Open an external editor with the currently selected form field.
 
         The editor which should be launched can be configured via the
-        `general -> editor` config option.
+        `editor.command` config option.
         """
         tab = self._current_widget()
         tab.elements.find_focused(self._open_editor_cb)
@@ -1626,14 +1646,6 @@ class CommandDispatcher:
             elem.set_value(text)
         except webelem.Error as e:
             raise cmdexc.CommandError(str(e))
-
-    @cmdutils.register(instance='command-dispatcher',
-                       deprecated="Use :insert-text {primary}",
-                       modes=[KeyMode.insert], hide=True, scope='window',
-                       backend=usertypes.Backend.QtWebKit)
-    def paste_primary(self):
-        """Paste the primary selection at cursor position."""
-        self.insert_text(utils.get_clipboard(selection=True, fallback=True))
 
     @cmdutils.register(instance='command-dispatcher', maxsplit=0,
                        scope='window')
@@ -1657,11 +1669,10 @@ class CommandDispatcher:
 
         tab.elements.find_focused(_insert_text_cb)
 
-    @cmdutils.register(instance='command-dispatcher', scope='window',
-                       hide=True)
+    @cmdutils.register(instance='command-dispatcher', scope='window')
     @cmdutils.argument('filter_', choices=['id'])
     def click_element(self, filter_: str, value, *,
-                      target: usertypes.ClickTarget=
+                      target: usertypes.ClickTarget =
                       usertypes.ClickTarget.normal,
                       force_event=False):
         """Click the element matching the given filter.
@@ -1749,7 +1760,7 @@ class CommandDispatcher:
             return
 
         options = {
-            'ignore_case': config.get('general', 'ignore-case'),
+            'ignore_case': config.val.ignore_case,
             'reverse': reverse,
         }
 
@@ -1763,8 +1774,7 @@ class CommandDispatcher:
 
         tab.search.search(text, **options)
 
-    @cmdutils.register(instance='command-dispatcher', hide=True,
-                       scope='window')
+    @cmdutils.register(instance='command-dispatcher', scope='window')
     @cmdutils.argument('count', count=True)
     def search_next(self, count=1):
         """Continue the search to the ([count]th) next term.
@@ -1798,8 +1808,7 @@ class CommandDispatcher:
             tab.search.next_result()
         tab.search.next_result(result_cb=cb)
 
-    @cmdutils.register(instance='command-dispatcher', hide=True,
-                       scope='window')
+    @cmdutils.register(instance='command-dispatcher', scope='window')
     @cmdutils.argument('count', count=True)
     def search_prev(self, count=1):
         """Continue the search to the ([count]th) previous term.
@@ -1833,8 +1842,8 @@ class CommandDispatcher:
             tab.search.prev_result()
         tab.search.prev_result(result_cb=cb)
 
-    @cmdutils.register(instance='command-dispatcher', hide=True,
-                       modes=[KeyMode.caret], scope='window')
+    @cmdutils.register(instance='command-dispatcher', modes=[KeyMode.caret],
+                       scope='window')
     @cmdutils.argument('count', count=True)
     def move_to_next_line(self, count=1):
         """Move the cursor or selection to the next line.
@@ -1844,8 +1853,8 @@ class CommandDispatcher:
         """
         self._current_widget().caret.move_to_next_line(count)
 
-    @cmdutils.register(instance='command-dispatcher', hide=True,
-                       modes=[KeyMode.caret], scope='window')
+    @cmdutils.register(instance='command-dispatcher', modes=[KeyMode.caret],
+                       scope='window')
     @cmdutils.argument('count', count=True)
     def move_to_prev_line(self, count=1):
         """Move the cursor or selection to the prev line.
@@ -1855,8 +1864,8 @@ class CommandDispatcher:
         """
         self._current_widget().caret.move_to_prev_line(count)
 
-    @cmdutils.register(instance='command-dispatcher', hide=True,
-                       modes=[KeyMode.caret], scope='window')
+    @cmdutils.register(instance='command-dispatcher', modes=[KeyMode.caret],
+                       scope='window')
     @cmdutils.argument('count', count=True)
     def move_to_next_char(self, count=1):
         """Move the cursor or selection to the next char.
@@ -1866,8 +1875,8 @@ class CommandDispatcher:
         """
         self._current_widget().caret.move_to_next_char(count)
 
-    @cmdutils.register(instance='command-dispatcher', hide=True,
-                       modes=[KeyMode.caret], scope='window')
+    @cmdutils.register(instance='command-dispatcher', modes=[KeyMode.caret],
+                       scope='window')
     @cmdutils.argument('count', count=True)
     def move_to_prev_char(self, count=1):
         """Move the cursor or selection to the previous char.
@@ -1877,8 +1886,8 @@ class CommandDispatcher:
         """
         self._current_widget().caret.move_to_prev_char(count)
 
-    @cmdutils.register(instance='command-dispatcher', hide=True,
-                       modes=[KeyMode.caret], scope='window')
+    @cmdutils.register(instance='command-dispatcher', modes=[KeyMode.caret],
+                       scope='window')
     @cmdutils.argument('count', count=True)
     def move_to_end_of_word(self, count=1):
         """Move the cursor or selection to the end of the word.
@@ -1888,8 +1897,8 @@ class CommandDispatcher:
         """
         self._current_widget().caret.move_to_end_of_word(count)
 
-    @cmdutils.register(instance='command-dispatcher', hide=True,
-                       modes=[KeyMode.caret], scope='window')
+    @cmdutils.register(instance='command-dispatcher', modes=[KeyMode.caret],
+                       scope='window')
     @cmdutils.argument('count', count=True)
     def move_to_next_word(self, count=1):
         """Move the cursor or selection to the next word.
@@ -1899,8 +1908,8 @@ class CommandDispatcher:
         """
         self._current_widget().caret.move_to_next_word(count)
 
-    @cmdutils.register(instance='command-dispatcher', hide=True,
-                       modes=[KeyMode.caret], scope='window')
+    @cmdutils.register(instance='command-dispatcher', modes=[KeyMode.caret],
+                       scope='window')
     @cmdutils.argument('count', count=True)
     def move_to_prev_word(self, count=1):
         """Move the cursor or selection to the previous word.
@@ -1910,20 +1919,20 @@ class CommandDispatcher:
         """
         self._current_widget().caret.move_to_prev_word(count)
 
-    @cmdutils.register(instance='command-dispatcher', hide=True,
-                       modes=[KeyMode.caret], scope='window')
+    @cmdutils.register(instance='command-dispatcher', modes=[KeyMode.caret],
+                       scope='window')
     def move_to_start_of_line(self):
         """Move the cursor or selection to the start of the line."""
         self._current_widget().caret.move_to_start_of_line()
 
-    @cmdutils.register(instance='command-dispatcher', hide=True,
-                       modes=[KeyMode.caret], scope='window')
+    @cmdutils.register(instance='command-dispatcher', modes=[KeyMode.caret],
+                       scope='window')
     def move_to_end_of_line(self):
         """Move the cursor or selection to the end of line."""
         self._current_widget().caret.move_to_end_of_line()
 
-    @cmdutils.register(instance='command-dispatcher', hide=True,
-                       modes=[KeyMode.caret], scope='window')
+    @cmdutils.register(instance='command-dispatcher', modes=[KeyMode.caret],
+                       scope='window')
     @cmdutils.argument('count', count=True)
     def move_to_start_of_next_block(self, count=1):
         """Move the cursor or selection to the start of next block.
@@ -1933,8 +1942,8 @@ class CommandDispatcher:
         """
         self._current_widget().caret.move_to_start_of_next_block(count)
 
-    @cmdutils.register(instance='command-dispatcher', hide=True,
-                       modes=[KeyMode.caret], scope='window')
+    @cmdutils.register(instance='command-dispatcher', modes=[KeyMode.caret],
+                       scope='window')
     @cmdutils.argument('count', count=True)
     def move_to_start_of_prev_block(self, count=1):
         """Move the cursor or selection to the start of previous block.
@@ -1944,8 +1953,8 @@ class CommandDispatcher:
         """
         self._current_widget().caret.move_to_start_of_prev_block(count)
 
-    @cmdutils.register(instance='command-dispatcher', hide=True,
-                       modes=[KeyMode.caret], scope='window')
+    @cmdutils.register(instance='command-dispatcher', modes=[KeyMode.caret],
+                       scope='window')
     @cmdutils.argument('count', count=True)
     def move_to_end_of_next_block(self, count=1):
         """Move the cursor or selection to the end of next block.
@@ -1955,8 +1964,8 @@ class CommandDispatcher:
         """
         self._current_widget().caret.move_to_end_of_next_block(count)
 
-    @cmdutils.register(instance='command-dispatcher', hide=True,
-                       modes=[KeyMode.caret], scope='window')
+    @cmdutils.register(instance='command-dispatcher', modes=[KeyMode.caret],
+                       scope='window')
     @cmdutils.argument('count', count=True)
     def move_to_end_of_prev_block(self, count=1):
         """Move the cursor or selection to the end of previous block.
@@ -1966,26 +1975,26 @@ class CommandDispatcher:
         """
         self._current_widget().caret.move_to_end_of_prev_block(count)
 
-    @cmdutils.register(instance='command-dispatcher', hide=True,
-                       modes=[KeyMode.caret], scope='window')
+    @cmdutils.register(instance='command-dispatcher', modes=[KeyMode.caret],
+                       scope='window')
     def move_to_start_of_document(self):
         """Move the cursor or selection to the start of the document."""
         self._current_widget().caret.move_to_start_of_document()
 
-    @cmdutils.register(instance='command-dispatcher', hide=True,
-                       modes=[KeyMode.caret], scope='window')
+    @cmdutils.register(instance='command-dispatcher', modes=[KeyMode.caret],
+                       scope='window')
     def move_to_end_of_document(self):
         """Move the cursor or selection to the end of the document."""
         self._current_widget().caret.move_to_end_of_document()
 
-    @cmdutils.register(instance='command-dispatcher', hide=True,
-                       modes=[KeyMode.caret], scope='window')
+    @cmdutils.register(instance='command-dispatcher', modes=[KeyMode.caret],
+                       scope='window')
     def toggle_selection(self):
         """Toggle caret selection mode."""
         self._current_widget().caret.toggle_selection()
 
-    @cmdutils.register(instance='command-dispatcher', hide=True,
-                       modes=[KeyMode.caret], scope='window')
+    @cmdutils.register(instance='command-dispatcher', modes=[KeyMode.caret],
+                       scope='window')
     def drop_selection(self):
         """Drop selection and keep selection mode enabled."""
         self._current_widget().caret.drop_selection()
@@ -2014,7 +2023,7 @@ class CommandDispatcher:
     @cmdutils.register(instance='command-dispatcher', scope='window',
                        maxsplit=0, no_cmd_split=True)
     def jseval(self, js_code, file=False, quiet=False, *,
-               world: typing.Union[usertypes.JsWorld, int]=None):
+               world: typing.Union[usertypes.JsWorld, int] = None):
         """Evaluate a JavaScript string.
 
         Args:
@@ -2099,17 +2108,21 @@ class CommandDispatcher:
         self._current_widget().clear_ssl_errors()
 
     @cmdutils.register(instance='command-dispatcher', scope='window')
-    def edit_url(self, url=None, bg=False, tab=False, window=False):
+    def edit_url(self, url=None, bg=False, tab=False, window=False,
+                 private=False, related=False):
         """Navigate to a url formed in an external editor.
 
         The editor which should be launched can be configured via the
-        `general -> editor` config option.
+        `editor.command` config option.
 
         Args:
             url: URL to edit; defaults to the current page url.
             bg: Open in a new background tab.
             tab: Open in a new tab.
             window: Open in a new window.
+            private: Open a new window in private browsing mode.
+            related: If opening a new tab, position the tab as related to the
+                     current one (like clicking on a link).
         """
         cmdutils.check_exclusive((tab, bg, window), 'tbw')
 
@@ -2120,12 +2133,11 @@ class CommandDispatcher:
         # Passthrough for openurl args (e.g. -t, -b, -w)
         ed.editing_finished.connect(functools.partial(
             self._open_if_changed, old_url=old_url, bg=bg, tab=tab,
-            window=window))
+            window=window, private=private, related=related))
 
         ed.edit(url or old_url)
 
-    @cmdutils.register(instance='command-dispatcher', scope='window',
-                       hide=True)
+    @cmdutils.register(instance='command-dispatcher', scope='window')
     def set_mark(self, key):
         """Set a mark at the current scroll position in the current tab.
 
@@ -2134,8 +2146,7 @@ class CommandDispatcher:
         """
         self._tabbed_browser.set_mark(key)
 
-    @cmdutils.register(instance='command-dispatcher', scope='window',
-                       hide=True)
+    @cmdutils.register(instance='command-dispatcher', scope='window')
     def jump_mark(self, key):
         """Jump to the mark named by `key`.
 
@@ -2145,7 +2156,7 @@ class CommandDispatcher:
         self._tabbed_browser.jump_mark(key)
 
     def _open_if_changed(self, url=None, old_url=None, bg=False, tab=False,
-                         window=False):
+                         window=False, private=False, related=False):
         """Open a URL unless it's already open in the tab.
 
         Args:
@@ -2154,9 +2165,13 @@ class CommandDispatcher:
             bg: Open in a new background tab.
             tab: Open in a new tab.
             window: Open in a new window.
+            private: Open a new window in private browsing mode.
+            related: If opening a new tab, position the tab as related to the
+                     current one (like clicking on a link).
         """
-        if bg or tab or window or url != old_url:
-            self.openurl(url=url, bg=bg, tab=tab, window=window)
+        if bg or tab or window or private or related or url != old_url:
+            self.openurl(url=url, bg=bg, tab=tab, window=window,
+                         private=private, related=related)
 
     @cmdutils.register(instance='command-dispatcher', scope='window')
     def fullscreen(self, leave=False):

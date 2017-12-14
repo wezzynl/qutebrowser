@@ -21,13 +21,13 @@
 
 import io
 import os
-import sys
 import os.path
 import unittest
 import unittest.mock
 try:
     # pylint: disable=no-name-in-module,useless-suppression
     from test import test_file
+    # pylint: enable=no-name-in-module,useless-suppression
 except ImportError:
     # Debian patches Python to remove the tests...
     test_file = None
@@ -36,39 +36,40 @@ import pytest
 from PyQt5.QtCore import (QDataStream, QPoint, QUrl, QByteArray, QIODevice,
                           QTimer, QBuffer, QFile, QProcess, QFileDevice)
 
-from qutebrowser import qutebrowser
-from qutebrowser.utils import qtutils
+from qutebrowser.utils import qtutils, utils
 import overflow_test_cases
 
 
-@pytest.mark.parametrize('qversion, compiled, version, exact, expected', [
+@pytest.mark.parametrize(['qversion', 'compiled', 'pyqt', 'version', 'exact',
+                          'expected'], [
     # equal versions
-    ('5.4.0', None, '5.4.0', False, True),
-    ('5.4.0', None, '5.4.0', True, True),  # exact=True
-    ('5.4.0', None, '5.4', True, True),  # without trailing 0
+    ('5.4.0', None, None, '5.4.0', False, True),
+    ('5.4.0', None, None, '5.4.0', True, True),  # exact=True
+    ('5.4.0', None, None, '5.4', True, True),  # without trailing 0
     # newer version installed
-    ('5.4.1', None, '5.4', False, True),
-    ('5.4.1', None, '5.4', True, False),  # exact=True
+    ('5.4.1', None, None, '5.4', False, True),
+    ('5.4.1', None, None, '5.4', True, False),  # exact=True
     # older version installed
-    ('5.3.2', None, '5.4', False, False),
-    ('5.3.0', None, '5.3.2', False, False),
-    ('5.3.0', None, '5.3.2', True, False),  # exact=True
-    # strict
-    ('5.4.0', '5.3.0', '5.4.0', False, False),
-    ('5.4.0', '5.4.0', '5.4.0', False, True),
-    # strict and exact=True
-    ('5.4.0', '5.5.0', '5.4.0', True, False),
-    ('5.5.0', '5.4.0', '5.4.0', True, False),
-    ('5.4.0', '5.4.0', '5.4.0', True, True),
+    ('5.3.2', None, None, '5.4', False, False),
+    ('5.3.0', None, None, '5.3.2', False, False),
+    ('5.3.0', None, None, '5.3.2', True, False),  # exact=True
+    # compiled=True
+    # new Qt runtime, but compiled against older version
+    ('5.4.0', '5.3.0', '5.4.0', '5.4.0', False, False),
+    # new Qt runtime, compiled against new version, but old PyQt
+    ('5.4.0', '5.4.0', '5.3.0', '5.4.0', False, False),
+    # all up-to-date
+    ('5.4.0', '5.4.0', '5.4.0', '5.4.0', False, True),
 ])
-def test_version_check(monkeypatch, qversion, compiled, version, exact,
+def test_version_check(monkeypatch, qversion, compiled, pyqt, version, exact,
                        expected):
     """Test for version_check().
 
     Args:
         monkeypatch: The pytest monkeypatch fixture.
         qversion: The version to set as fake qVersion().
-        compiled: The value for QT_VERSION_STR (set strict=True)
+        compiled: The value for QT_VERSION_STR (set compiled=False)
+        pyqt: The value for PYQT_VERSION_STR (set compiled=False)
         version: The version to compare with.
         exact: Use exact comparing (==)
         expected: The expected result.
@@ -76,21 +77,28 @@ def test_version_check(monkeypatch, qversion, compiled, version, exact,
     monkeypatch.setattr(qtutils, 'qVersion', lambda: qversion)
     if compiled is not None:
         monkeypatch.setattr(qtutils, 'QT_VERSION_STR', compiled)
-        strict = True
+        monkeypatch.setattr(qtutils, 'PYQT_VERSION_STR', pyqt)
+        compiled_arg = True
     else:
-        strict = False
+        compiled_arg = False
 
-    assert qtutils.version_check(version, exact, strict=strict) == expected
+    actual = qtutils.version_check(version, exact, compiled=compiled_arg)
+    assert actual == expected
 
 
-@pytest.mark.parametrize('version, ng', [
+def test_version_check_compiled_and_exact():
+    with pytest.raises(ValueError):
+        qtutils.version_check('1.2.3', exact=True, compiled=True)
+
+
+@pytest.mark.parametrize('version, is_new', [
     ('537.21', False),  # QtWebKit 5.1
     ('538.1', False),   # Qt 5.8
-    ('602.1', True)     # QtWebKit-NG TP5
+    ('602.1', True)     # new QtWebKit TP5, 5.212 Alpha
 ])
-def test_is_qtwebkit_ng(monkeypatch, version, ng):
+def test_is_new_qtwebkit(monkeypatch, version, is_new):
     monkeypatch.setattr(qtutils, 'qWebKitVersion', lambda: version)
-    assert qtutils.is_qtwebkit_ng() == ng
+    assert qtutils.is_new_qtwebkit() == is_new
 
 
 class TestCheckOverflow:
@@ -117,71 +125,6 @@ class TestCheckOverflow:
         """Test values which are outside bounds with fatal=False."""
         newval = qtutils.check_overflow(val, ctype, fatal=False)
         assert newval == repl
-
-
-class TestGetQtArgs:
-
-    """Tests for get_args."""
-
-    @pytest.fixture
-    def parser(self, mocker):
-        """Fixture to provide an argparser.
-
-        Monkey-patches .exit() of the argparser so it doesn't exit on errors.
-        """
-        parser = qutebrowser.get_argparser()
-        mocker.patch.object(parser, 'exit', side_effect=Exception)
-        return parser
-
-    @pytest.mark.parametrize('args, expected', [
-        # No Qt arguments
-        (['--debug'], [sys.argv[0]]),
-        # Qt flag
-        (['--debug', '--qt-flag', 'reverse'], [sys.argv[0], '--reverse']),
-        # Qt argument with value
-        (['--qt-arg', 'stylesheet', 'foo'],
-         [sys.argv[0], '--stylesheet', 'foo']),
-        # --qt-arg given twice
-        (['--qt-arg', 'stylesheet', 'foo', '--qt-arg', 'geometry', 'bar'],
-         [sys.argv[0], '--stylesheet', 'foo', '--geometry', 'bar']),
-        # --qt-flag given twice
-        (['--qt-flag', 'foo', '--qt-flag', 'bar'],
-         [sys.argv[0], '--foo', '--bar']),
-    ])
-    def test_qt_args(self, args, expected, parser):
-        """Test commandline with no Qt arguments given."""
-        parsed = parser.parse_args(args)
-        assert qtutils.get_args(parsed) == expected
-
-    def test_qt_both(self, parser):
-        """Test commandline with a Qt argument and flag."""
-        args = parser.parse_args(['--qt-arg', 'stylesheet', 'foobar',
-                                  '--qt-flag', 'reverse'])
-        qt_args = qtutils.get_args(args)
-        assert qt_args[0] == sys.argv[0]
-        assert '--reverse' in qt_args
-        assert '--stylesheet' in qt_args
-        assert 'foobar' in qt_args
-
-
-@pytest.mark.parametrize('os_name, qversion, expected', [
-    ('linux', '5.2.1', True),  # unaffected OS
-    ('linux', '5.4.1', True),  # unaffected OS
-    ('nt', '5.2.1', False),
-    ('nt', '5.3.0', True),  # unaffected Qt version
-    ('nt', '5.4.1', True),  # unaffected Qt version
-])
-def test_check_print_compat(os_name, qversion, expected, monkeypatch):
-    """Test check_print_compat.
-
-    Args:
-        os_name: The fake os.name to set.
-        qversion: The fake qVersion() to set.
-        expected: The expected return value.
-    """
-    monkeypatch.setattr(qtutils.os, 'name', os_name)
-    monkeypatch.setattr(qtutils, 'qVersion', lambda: qversion)
-    assert qtutils.check_print_compat() == expected
 
 
 class QtObject:
@@ -524,28 +467,13 @@ class TestSavefileOpen:
         with qtutils.savefile_open(str(filename)) as f:
             f.write('foo\nbar\nbaz')
         data = filename.read_binary()
-        if os.name == 'nt':
+        if utils.is_windows:
             assert data == b'foo\r\nbar\r\nbaz'
         else:
             assert data == b'foo\nbar\nbaz'
 
 
-@pytest.mark.parametrize('orgname, expected', [(None, ''), ('test', 'test')])
-def test_unset_organization(qapp, orgname, expected):
-    """Test unset_organization.
-
-    Args:
-        orgname: The organizationName to set initially.
-        expected: The organizationName which is expected when reading back.
-    """
-    qapp.setOrganizationName(orgname)
-    assert qapp.organizationName() == expected  # sanity check
-    with qtutils.unset_organization():
-        assert qapp.organizationName() == ''
-    assert qapp.organizationName() == expected
-
-
-if test_file is not None and sys.platform != 'darwin':
+if test_file is not None and not utils.is_mac:
     # If we were able to import Python's test_file module, we run some code
     # here which defines unittest TestCases to run the python tests over
     # PyQIODevice.
@@ -774,6 +702,7 @@ class TestPyQIODevice:
             whence = os.SEEK_HOLE
         elif hasattr(os, 'SEEK_DATA'):
             whence = os.SEEK_DATA
+        # pylint: enable=no-member,useless-suppression
         else:
             pytest.skip("Needs os.SEEK_HOLE or os.SEEK_DATA available.")
         pyqiodev.open(QIODevice.ReadOnly)

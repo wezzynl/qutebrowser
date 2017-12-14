@@ -24,9 +24,10 @@ import sys
 import inspect
 import os.path
 import collections
+import enum
 
 import qutebrowser
-from qutebrowser.utils import usertypes, log, utils
+from qutebrowser.utils import log, utils
 
 
 def is_git_repo():
@@ -63,7 +64,7 @@ class DocstringParser:
 
     """Generate documentation based on a docstring of a command handler.
 
-    The docstring needs to follow the format described in CONTRIBUTING.
+    The docstring needs to follow the format described in doc/contributing.
 
     Attributes:
         _state: The current state of the parser state machine.
@@ -75,8 +76,8 @@ class DocstringParser:
         arg_descs: A dict of argument names to their descriptions
     """
 
-    State = usertypes.enum('State', ['short', 'desc', 'desc_hidden',
-                                     'arg_start', 'arg_inside', 'misc'])
+    State = enum.Enum('State', ['short', 'desc', 'desc_hidden',
+                                'arg_start', 'arg_inside', 'misc'])
 
     def __init__(self, func):
         """Constructor.
@@ -142,7 +143,7 @@ class DocstringParser:
         """Parse the long description in the docstring."""
         if line.startswith('Args:'):
             self._state = self.State.arg_start
-        elif line.strip() == '//':
+        elif line.strip() == '//' or line.startswith('Attributes:'):
             self._state = self.State.desc_hidden
         elif line.strip():
             self._long_desc_parts.append(line.strip())

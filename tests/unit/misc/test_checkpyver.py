@@ -28,23 +28,22 @@ import pytest
 from qutebrowser.misc import checkpyver
 
 
-TEXT = (r"At least Python 3.4 is required to run qutebrowser, but "
-        r"\d+\.\d+\.\d+ is installed!\n")
+TEXT = (r"At least Python 3.5 is required to run qutebrowser, but it's "
+        r"running with \d+\.\d+\.\d+.\n")
 
 
 @pytest.mark.not_frozen
 def test_python2():
     """Run checkpyver with python 2."""
     try:
-        proc = subprocess.Popen(
+        proc = subprocess.run(
             ['python2', checkpyver.__file__, '--no-err-windows'],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE)
-        stdout, stderr = proc.communicate()
     except FileNotFoundError:
         pytest.skip("python2 not found")
-    assert not stdout
-    stderr = stderr.decode('utf-8')
+    assert not proc.stdout
+    stderr = proc.stderr.decode('utf-8')
     assert re.match(TEXT, stderr), stderr
     assert proc.returncode == 1
 
@@ -60,7 +59,7 @@ def test_patched_no_errwindow(capfd, monkeypatch):
     """Test with a patched sys.hexversion and --no-err-windows."""
     monkeypatch.setattr(checkpyver.sys, 'argv',
                         [sys.argv[0], '--no-err-windows'])
-    monkeypatch.setattr(checkpyver.sys, 'hexversion', 0x03000000)
+    monkeypatch.setattr(checkpyver.sys, 'hexversion', 0x03040000)
     monkeypatch.setattr(checkpyver.sys, 'exit', lambda status: None)
     checkpyver.check_python_version()
     stdout, stderr = capfd.readouterr()
@@ -70,7 +69,7 @@ def test_patched_no_errwindow(capfd, monkeypatch):
 
 def test_patched_errwindow(capfd, mocker, monkeypatch):
     """Test with a patched sys.hexversion and a fake Tk."""
-    monkeypatch.setattr(checkpyver.sys, 'hexversion', 0x03000000)
+    monkeypatch.setattr(checkpyver.sys, 'hexversion', 0x03040000)
     monkeypatch.setattr(checkpyver.sys, 'exit', lambda status: None)
 
     try:

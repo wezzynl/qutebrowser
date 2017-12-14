@@ -138,20 +138,12 @@ class FakeMainWindow(QObject):
 
 
 @pytest.fixture
-def fake_window(win_registry, stubs, monkeypatch, qtbot):
+def fake_window(tabbed_browser_stubs):
     """Fixture which provides a fake main windows with a tabbedbrowser."""
     win0 = FakeMainWindow(b'fake-geometry-0', win_id=0)
     objreg.register('main-window', win0, scope='window', window=0)
-
-    webview = QWebView()
-    qtbot.add_widget(webview)
-    browser = stubs.TabbedBrowserStub([webview])
-    objreg.register('tabbed-browser', browser, scope='window', window=0)
-
     yield
-
     objreg.delete('main-window', scope='window', window=0)
-    objreg.delete('tabbed-browser', scope='window', window=0)
 
 
 class TestSaveAll:
@@ -178,7 +170,7 @@ class TestSaveAll:
 ])
 def test_get_session_name(config_stub, sess_man, arg, config, current,
                           expected):
-    config_stub.data = {'general': {'session-default-name': config}}
+    config_stub.val.session_default_name = config
     sess_man._current = current
     assert sess_man._get_session_name(arg) == expected
 
@@ -186,20 +178,18 @@ def test_get_session_name(config_stub, sess_man, arg, config, current,
 class TestSave:
 
     @pytest.fixture
-    def state_config(self):
+    def state_config(self, monkeypatch):
         state = {'general': {}}
-        objreg.register('state-config', state)
-        yield state
-        objreg.delete('state-config')
+        monkeypatch.setattr(sessions.configfiles, 'state', state)
+        return state
 
     @pytest.fixture
-    def fake_history(self, win_registry, stubs, monkeypatch, webview):
+    def fake_history(self, stubs, tabbed_browser_stubs, monkeypatch, webview):
         """Fixture which provides a window with a fake history."""
         win = FakeMainWindow(b'fake-geometry-0', win_id=0)
         objreg.register('main-window', win, scope='window', window=0)
-        browser = stubs.TabbedBrowserStub([webview])
 
-        objreg.register('tabbed-browser', browser, scope='window', window=0)
+        browser = tabbed_browser_stubs[0]
         qapp = stubs.FakeQApplication(active_window=win)
         monkeypatch.setattr(sessions, 'QApplication', qapp)
 

@@ -40,13 +40,7 @@ class AsciiDoc:
 
     """Abstraction of an asciidoc subprocess."""
 
-    FILES = [
-        ('FAQ.asciidoc', 'qutebrowser/html/doc/FAQ.html'),
-        ('CHANGELOG.asciidoc', 'qutebrowser/html/doc/CHANGELOG.html'),
-        ('CONTRIBUTING.asciidoc', 'qutebrowser/html/doc/CONTRIBUTING.html'),
-        ('doc/quickstart.asciidoc', 'qutebrowser/html/doc/quickstart.html'),
-        ('doc/userscripts.asciidoc', 'qutebrowser/html/doc/userscripts.html'),
-    ]
+    FILES = ['faq', 'changelog', 'contributing', 'quickstart', 'userscripts']
 
     def __init__(self, args):
         self._cmd = None
@@ -80,7 +74,9 @@ class AsciiDoc:
 
     def _build_docs(self):
         """Render .asciidoc files to .html sites."""
-        files = self.FILES[:]
+        files = [('doc/{}.asciidoc'.format(f),
+                  'qutebrowser/html/doc/{}.html'.format(f))
+                 for f in self.FILES]
         for src in glob.glob('doc/help/*.asciidoc'):
             name, _ext = os.path.splitext(os.path.basename(src))
             dst = 'qutebrowser/html/doc/{}.html'.format(name)
@@ -88,11 +84,12 @@ class AsciiDoc:
 
         # patch image links to use local copy
         replacements = [
-            ("http://qutebrowser.org/img/cheatsheet-big.png",
+            ("https://qutebrowser.org/img/cheatsheet-big.png",
                 "qute://help/img/cheatsheet-big.png"),
-            ("http://qutebrowser.org/img/cheatsheet-small.png",
+            ("https://qutebrowser.org/img/cheatsheet-small.png",
                 "qute://help/img/cheatsheet-small.png")
         ]
+        asciidoc_args = ['-a', 'source-highlighter=pygments']
 
         for src, dst in files:
             src_basename = os.path.basename(src)
@@ -103,7 +100,7 @@ class AsciiDoc:
                     for orig, repl in replacements:
                         line = line.replace(orig, repl)
                     modified_f.write(line)
-            self.call(modified_src, dst)
+            self.call(modified_src, dst, *asciidoc_args)
 
     def _copy_images(self):
         """Copy image files to qutebrowser/html/doc."""
@@ -120,7 +117,6 @@ class AsciiDoc:
 
     def _build_website_file(self, root, filename):
         """Build a single website file."""
-        # pylint: disable=too-many-locals,too-many-statements
         src = os.path.join(root, filename)
         src_basename = os.path.basename(src)
         parts = [self._args.website[0]]
@@ -184,7 +180,8 @@ class AsciiDoc:
         with open(modified_src, 'w+', encoding='utf-8') as final_version:
             final_version.write(title + "\n\n" + header + current_lines)
 
-        asciidoc_args = ['--theme=qute', '-a toc', '-a toc-placement=manual']
+        asciidoc_args = ['--theme=qute', '-a toc', '-a toc-placement=manual',
+                         '-a', 'source-highlighter=pygments']
         self.call(modified_src, dst, *asciidoc_args)
 
     def _build_website(self):
@@ -227,16 +224,16 @@ class AsciiDoc:
             return self._args.asciidoc
 
         try:
-            subprocess.call(['asciidoc'], stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL)
+            subprocess.run(['asciidoc'], stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL)
         except OSError:
             pass
         else:
             return ['asciidoc']
 
         try:
-            subprocess.call(['asciidoc.py'], stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL)
+            subprocess.run(['asciidoc.py'], stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL)
         except OSError:
             pass
         else:
@@ -261,7 +258,7 @@ class AsciiDoc:
         try:
             env = os.environ.copy()
             env['HOME'] = self._homedir
-            subprocess.check_call(cmdline, env=env)
+            subprocess.run(cmdline, check=True, env=env)
         except (subprocess.CalledProcessError, OSError) as e:
             self._failed = True
             utils.print_col(str(e), 'red')

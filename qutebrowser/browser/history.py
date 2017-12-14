@@ -26,8 +26,12 @@ from PyQt5.QtCore import pyqtSlot, QUrl, QTimer
 
 from qutebrowser.commands import cmdutils, cmdexc
 from qutebrowser.utils import (utils, objreg, log, usertypes, message,
-                               debug, standarddir)
+                               debug, standarddir, qtutils)
 from qutebrowser.misc import objects, sql
+
+
+# increment to indicate that HistoryCompletion must be regenerated
+_USER_VERSION = 1
 
 
 class CompletionHistory(sql.SqlTable):
@@ -36,7 +40,10 @@ class CompletionHistory(sql.SqlTable):
 
     def __init__(self, parent=None):
         super().__init__("CompletionHistory", ['url', 'title', 'last_atime'],
-                         constraints={'url': 'PRIMARY KEY'}, parent=parent)
+                         constraints={'url': 'PRIMARY KEY',
+                                      'title': 'NOT NULL',
+                                      'last_atime': 'NOT NULL'},
+                         parent=parent)
         self.create_index('CompletionHistoryAtimeIndex', 'last_atime')
 
 
@@ -46,8 +53,17 @@ class WebHistory(sql.SqlTable):
 
     def __init__(self, parent=None):
         super().__init__("History", ['url', 'title', 'atime', 'redirect'],
+                         constraints={'url': 'NOT NULL',
+                                      'title': 'NOT NULL',
+                                      'atime': 'NOT NULL',
+                                      'redirect': 'NOT NULL'},
                          parent=parent)
         self.completion = CompletionHistory(parent=self)
+        if sql.Query('pragma user_version').run().value() < _USER_VERSION:
+            self.completion.delete_all()
+        if not self.completion:
+            # either the table is out-of-date or the user wiped it manually
+            self._rebuild_completion()
         self.create_index('HistoryIndex', 'url')
         self.create_index('HistoryAtimeIndex', 'atime')
         self._contains_query = self.contains_query('url')
@@ -70,6 +86,18 @@ class WebHistory(sql.SqlTable):
 
     def __contains__(self, url):
         return self._contains_query.run(val=url).value()
+
+    def _rebuild_completion(self):
+        data = {'url': [], 'title': [], 'last_atime': []}
+        # select the latest entry for each url
+        q = sql.Query('SELECT url, title, max(atime) AS atime FROM History '
+                      'WHERE NOT redirect GROUP BY url ORDER BY atime asc')
+        for entry in q.run():
+            data['url'].append(self._format_completion_url(QUrl(entry.url)))
+            data['title'].append(entry.title)
+            data['last_atime'].append(entry.atime)
+        self.completion.insert_batch(data, replace=True)
+        sql.Query('pragma user_version = {}'.format(_USER_VERSION)).run()
 
     def get_recent(self):
         """Get the most recent history entries."""
@@ -111,7 +139,7 @@ class WebHistory(sql.SqlTable):
             self._do_clear()
         else:
             message.confirm_async(self._do_clear, title="Clear all browsing "
-                                "history?")
+                                  "history?")
 
     def _do_clear(self):
         self.delete_all()
@@ -123,8 +151,10 @@ class WebHistory(sql.SqlTable):
         Args:
             url: URL string to delete.
         """
-        self.delete('url', url)
-        self.completion.delete('url', url)
+        qurl = QUrl(url)
+        qtutils.ensure_valid(qurl)
+        self.delete('url', self._format_url(qurl))
+        self.completion.delete('url', self._format_completion_url(qurl))
 
     @pyqtSlot(QUrl, QUrl, str)
     def add_from_tab(self, url, requested_url, title):
@@ -152,23 +182,31 @@ class WebHistory(sql.SqlTable):
                       (hidden in completion)
             atime: Override the atime used to add the entry
         """
-        if not url.isValid():  # pragma: no cover
-            # the no cover pragma is a WORKAROUND for this not being covered in
-            # old Qt versions.
+        if not url.isValid():
             log.misc.warning("Ignoring invalid URL being added to history")
             return
 
+        if 'no-sql-history' in objreg.get('args').debug_flags:
+            return
+
         atime = int(atime) if (atime is not None) else int(time.time())
-        url_str = url.toString(QUrl.FullyEncoded | QUrl.RemovePassword)
-        self.insert({'url': url_str,
-                     'title': title,
-                     'atime': atime,
-                     'redirect': redirect})
-        if not redirect:
-            self.completion.insert({'url': url_str,
-                                    'title': title,
-                                    'last_atime': atime},
-                                   replace=True)
+
+        try:
+            self.insert({'url': self._format_url(url),
+                         'title': title,
+                         'atime': atime,
+                         'redirect': redirect})
+            if not redirect:
+                self.completion.insert({
+                    'url': self._format_completion_url(url),
+                    'title': title,
+                    'last_atime': atime
+                }, replace=True)
+        except sql.SqlError as e:
+            if e.environmental:
+                message.error("Failed to write history: {}".format(e.text()))
+            else:
+                raise
 
     def _parse_entry(self, line):
         """Parse a history line like '12345 http://example.com title'."""
@@ -229,10 +267,7 @@ class WebHistory(sql.SqlTable):
                 except ValueError as ex:
                     message.error('Failed to import history: {}'.format(ex))
                 else:
-                    bakpath = path + '.bak'
-                    message.info('History import complete. Moving {} to {}'
-                                 .format(path, bakpath))
-                    os.rename(path, bakpath)
+                    self._write_backup(path)
 
         # delay to give message time to appear before locking down for import
         message.info('Converting {} to sqlite...'.format(path))
@@ -249,12 +284,13 @@ class WebHistory(sql.SqlTable):
                     if parsed is None:
                         continue
                     url, title, atime, redirect = parsed
-                    data['url'].append(url)
+                    data['url'].append(self._format_url(url))
                     data['title'].append(title)
                     data['atime'].append(atime)
                     data['redirect'].append(redirect)
                     if not redirect:
-                        completion_data['url'].append(url)
+                        completion_data['url'].append(
+                            self._format_completion_url(url))
                         completion_data['title'].append(title)
                         completion_data['last_atime'].append(atime)
                 except ValueError as ex:
@@ -262,6 +298,22 @@ class WebHistory(sql.SqlTable):
                                      .format(i, path, ex))
         self.insert_batch(data)
         self.completion.insert_batch(completion_data, replace=True)
+
+    def _write_backup(self, path):
+        bak = path + '.bak'
+        message.info('History import complete. Appending {} to {}'
+                     .format(path, bak))
+        with open(path, 'r', encoding='utf-8') as infile:
+            with open(bak, 'a', encoding='utf-8') as outfile:
+                for line in infile:
+                    outfile.write('\n' + line)
+        os.remove(path)
+
+    def _format_url(self, url):
+        return url.toString(QUrl.RemovePassword | QUrl.FullyEncoded)
+
+    def _format_completion_url(self, url):
+        return url.toString(QUrl.RemovePassword)
 
     @cmdutils.register(instance='web-history', debug=True)
     def debug_dump_history(self, dest):
@@ -293,6 +345,6 @@ def init(parent=None):
     history = WebHistory(parent=parent)
     objreg.register('web-history', history)
 
-    if objects.backend == usertypes.Backend.QtWebKit:
+    if objects.backend == usertypes.Backend.QtWebKit:  # pragma: no cover
         from qutebrowser.browser.webkit import webkithistory
         webkithistory.init(history)

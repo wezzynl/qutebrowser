@@ -21,12 +21,10 @@
 
 import pytest
 
-from qutebrowser.commands import runners, cmdexc
+from qutebrowser.commands import runners, cmdexc, cmdutils
 
 
-class TestCommandRunner:
-
-    """Tests for CommandRunner."""
+class TestCommandParser:
 
     def test_parse_all(self, cmdline_test):
         """Test parsing of commands.
@@ -36,22 +34,26 @@ class TestCommandRunner:
         Args:
             cmdline_test: A pytest fixture which provides testcases.
         """
-        cr = runners.CommandRunner(0)
+        parser = runners.CommandParser()
         if cmdline_test.valid:
-            list(cr.parse_all(cmdline_test.cmd, aliases=False))
+            parser.parse_all(cmdline_test.cmd, aliases=False)
         else:
             with pytest.raises(cmdexc.NoSuchCommandError):
-                list(cr.parse_all(cmdline_test.cmd, aliases=False))
+                parser.parse_all(cmdline_test.cmd, aliases=False)
 
-    def test_parse_all_with_alias(self, cmdline_test, config_stub):
-        config_stub.data = {'aliases': {'alias_name': cmdline_test.cmd}}
+    def test_parse_all_with_alias(self, cmdline_test, monkeypatch,
+                                  config_stub):
+        if not cmdline_test.cmd:
+            pytest.skip("Empty command")
 
-        cr = runners.CommandRunner(0)
+        config_stub.val.aliases = {'alias_name': cmdline_test.cmd}
+
+        parser = runners.CommandParser()
         if cmdline_test.valid:
-            assert len(list(cr.parse_all("alias_name"))) > 0
+            assert len(parser.parse_all("alias_name")) > 0
         else:
             with pytest.raises(cmdexc.NoSuchCommandError):
-                list(cr.parse_all("alias_name"))
+                parser.parse_all("alias_name")
 
     @pytest.mark.parametrize('command', ['', ' '])
     def test_parse_empty_with_alias(self, command):
@@ -60,15 +62,51 @@ class TestCommandRunner:
         See https://github.com/qutebrowser/qutebrowser/issues/1690
         and https://github.com/qutebrowser/qutebrowser/issues/1773
         """
-        cr = runners.CommandRunner(0)
+        parser = runners.CommandParser()
         with pytest.raises(cmdexc.NoSuchCommandError):
-            list(cr.parse_all(command))
+            parser.parse_all(command)
 
-    def test_partial_parsing(self):
+
+class TestCompletions:
+
+    """Tests for completions.use_best_match."""
+
+    @pytest.fixture(autouse=True)
+    def cmdutils_stub(self, monkeypatch, stubs):
+        """Patch the cmdutils module to provide fake commands."""
+        monkeypatch.setattr(cmdutils, 'cmd_dict', {
+            'one': stubs.FakeCommand(name='one'),
+            'two': stubs.FakeCommand(name='two'),
+            'two-foo': stubs.FakeCommand(name='two-foo'),
+        })
+
+    def test_partial_parsing(self, config_stub):
         """Test partial parsing with a runner where it's enabled.
 
         The same with it being disabled is tested by test_parse_all.
         """
-        cr = runners.CommandRunner(0, partial_match=True)
-        result = cr.parse('message-i')
-        assert result.cmd.name == 'message-info'
+        parser = runners.CommandParser(partial_match=True)
+        result = parser.parse('on')
+        assert result.cmd.name == 'one'
+
+    def test_dont_use_best_match(self, config_stub):
+        """Test multiple completion options with use_best_match set to false.
+
+        Should raise NoSuchCommandError
+        """
+        config_stub.val.completion.use_best_match = False
+        parser = runners.CommandParser(partial_match=True)
+
+        with pytest.raises(cmdexc.NoSuchCommandError):
+            parser.parse('tw')
+
+    def test_use_best_match(self, config_stub):
+        """Test multiple completion options with use_best_match set to true.
+
+        The resulting command should be the best match
+        """
+        config_stub.val.completion.use_best_match = True
+        parser = runners.CommandParser(partial_match=True)
+
+        result = parser.parse('tw')
+        assert result.cmd.name == 'two'

@@ -28,29 +28,17 @@ Module attributes:
 
 
 import io
-import os
-import sys
 import operator
 import contextlib
 
+import pkg_resources
 from PyQt5.QtCore import (qVersion, QEventLoop, QDataStream, QByteArray,
-                          QIODevice, QSaveFile, QT_VERSION_STR)
-from PyQt5.QtWidgets import QApplication
+                          QIODevice, QSaveFile, QT_VERSION_STR,
+                          PYQT_VERSION_STR)
 try:
     from PyQt5.QtWebKit import qWebKitVersion
 except ImportError:  # pragma: no cover
     qWebKitVersion = None
-
-from qutebrowser.utils import log
-
-with log.ignore_py_warnings(category=PendingDeprecationWarning, module='imp'):
-    with log.ignore_py_warnings(category=ImportWarning):
-        # This imports 'imp' and gives us a PendingDeprecationWarning on
-        # Debian Jessie.
-        #
-        # On Archlinux, we get ImportWarning from
-        # importlib/_bootstrap_external.py for modules with missing __init__.
-        import pkg_resources
 
 
 MAXVALS = {
@@ -84,28 +72,34 @@ class QtOSError(OSError):
             self.qt_errno = None
 
 
-def version_check(version, exact=False, strict=False):
+def version_check(version, exact=False, compiled=True):
     """Check if the Qt runtime version is the version supplied or newer.
 
     Args:
         version: The version to check against.
         exact: if given, check with == instead of >=
-        strict: If given, also check the compiled Qt version.
+        compiled: Set to False to not check the compiled version.
     """
     # Catch code using the old API for this
     assert exact not in [operator.gt, operator.lt, operator.ge, operator.le,
                          operator.eq], exact
+    if compiled and exact:
+        raise ValueError("Can't use compiled=True with exact=True!")
+
     parsed = pkg_resources.parse_version(version)
     op = operator.eq if exact else operator.ge
     result = op(pkg_resources.parse_version(qVersion()), parsed)
-    if strict and result:
-        # v1 ==/>= parsed, now check if v2 ==/>= parsed too.
+    if compiled and result:
+        # qVersion() ==/>= parsed, now check if QT_VERSION_STR ==/>= parsed.
         result = op(pkg_resources.parse_version(QT_VERSION_STR), parsed)
+    if compiled and result:
+        # FInally, check PYQT_VERSION_STR as well.
+        result = op(pkg_resources.parse_version(PYQT_VERSION_STR), parsed)
     return result
 
 
-def is_qtwebkit_ng():
-    """Check if the given version is QtWebKit-NG."""
+def is_new_qtwebkit():
+    """Check if the given version is a new QtWebKit."""
     assert qWebKitVersion is not None
     return (pkg_resources.parse_version(qWebKitVersion()) >
             pkg_resources.parse_version('538.1'))
@@ -137,36 +131,6 @@ def check_overflow(arg, ctype, fatal=True):
             return minval
     else:
         return arg
-
-
-def get_args(namespace):
-    """Get the Qt QApplication arguments based on an argparse namespace.
-
-    Args:
-        namespace: The argparse namespace.
-
-    Return:
-        The argv list to be passed to Qt.
-    """
-    argv = [sys.argv[0]]
-
-    if namespace.qt_flag is not None:
-        argv += ['--' + flag[0] for flag in namespace.qt_flag]
-
-    if namespace.qt_arg is not None:
-        for name, value in namespace.qt_arg:
-            argv += ['--' + name, value]
-
-    return argv
-
-
-def check_print_compat():
-    """Check if printing should work in the given Qt version."""
-    # WORKAROUND (remove this when we bump the requirements to 5.3.0)
-    if os.name == 'nt':
-        return version_check('5.3')
-    else:
-        return True
 
 
 def ensure_valid(obj):
@@ -240,21 +204,6 @@ def savefile_open(filename, binary=False, encoding='utf-8'):
         commit_ok = f.commit()
         if not commit_ok and not cancelled:
             raise QtOSError(f, msg="Commit failed!")
-
-
-@contextlib.contextmanager
-def unset_organization():
-    """Temporarily unset QApplication.organizationName().
-
-    This is primarily needed in config.py.
-    """
-    qapp = QApplication.instance()
-    orgname = qapp.organizationName()
-    qapp.setOrganizationName(None)
-    try:
-        yield
-    finally:
-        qapp.setOrganizationName(orgname)
 
 
 class PyQIODevice(io.BufferedIOBase):

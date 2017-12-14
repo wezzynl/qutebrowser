@@ -18,15 +18,15 @@
 # along with qutebrowser.  If not, see <http://www.gnu.org/licenses/>.
 
 import os
-import collections
 
+import attr
 import pytest
 import bs4
 from PyQt5.QtCore import QUrl
 from PyQt5.QtNetwork import QNetworkRequest
 
 from qutebrowser.browser.webkit.network import filescheme
-from qutebrowser.utils import urlutils
+from qutebrowser.utils import urlutils, utils
 
 
 @pytest.mark.parametrize('create_file, create_dir, filterfunc, expected', [
@@ -109,8 +109,18 @@ def _file_url(path):
 
 class TestDirbrowserHtml:
 
-    Parsed = collections.namedtuple('Parsed', 'parent, folders, files')
-    Item = collections.namedtuple('Item', 'link, text')
+    @attr.s
+    class Parsed:
+
+        parent = attr.ib()
+        folders = attr.ib()
+        files = attr.ib()
+
+    @attr.s
+    class Item:
+
+        link = attr.ib()
+        text = attr.ib()
 
     @pytest.fixture
     def parser(self):
@@ -218,10 +228,7 @@ class TestDirbrowserHtml:
         assert parsed.folders == [bar_item]
 
     def test_root_dir(self, tmpdir, parser):
-        if os.name == 'nt':
-            root_dir = 'C:\\'
-        else:
-            root_dir = '/'
+        root_dir = 'C:\\' if utils.is_windows else '/'
         parsed = parser(root_dir)
         assert not parsed.parent
 
@@ -254,5 +261,16 @@ class TestFileSchemeHandler:
         url = QUrl.fromLocalFile(str(filename))
         req = QNetworkRequest(url)
         handler = filescheme.FileSchemeHandler(win_id=0)
+        reply = handler.createRequest(None, req, None)
+        assert reply is None
+
+    def test_unicode_encode_error(self, mocker):
+        url = QUrl('file:///tmp/foo')
+        req = QNetworkRequest(url)
+        handler = filescheme.FileSchemeHandler(win_id=0)
+
+        err = UnicodeEncodeError('ascii', '', 0, 2, 'foo')
+        mocker.patch('os.path.isdir', side_effect=err)
+
         reply = handler.createRequest(None, req, None)
         assert reply is None

@@ -32,6 +32,7 @@ Feature: Page history
         Then the history should contain:
             http://localhost:(port)/data/title%20with%20spaces.html Test title
 
+    @unicode_locale
     Scenario: History item with umlauts
         When I open data/äöü.html
         Then the history should contain:
@@ -46,11 +47,13 @@ Feature: Page history
 
     @qtwebengine_todo: Error page message is not implemented
     Scenario: History with a 404
-        When I open status/404 without waiting
-        And I wait for "Error while loading http://localhost:*/status/404: NOT FOUND" in the log
+        When I open 404 without waiting
+        And I wait for "Error while loading http://localhost:*/404: NOT FOUND" in the log
         Then the history should contain:
-            http://localhost:(port)/status/404 Error loading page: http://localhost:(port)/status/404
+            http://localhost:(port)/404 Error loading page: http://localhost:(port)/404
 
+    # Hangs a lot on AppVeyor
+    @posix
     Scenario: History with invalid URL
         When I run :tab-only
         And I open data/javascript/window_open.html
@@ -71,8 +74,11 @@ Feature: Page history
         Then the history should contain:
             http://localhost:(port)/data/title.html Test title
 
+    # Hangs a lot on AppVeyor
+    @posix
     Scenario: Clearing history
-        When I open data/title.html
+        When I run :tab-only
+        And I open data/title.html
         And I run :history-clear --force
         Then the history should be empty
 
@@ -97,6 +103,8 @@ Feature: Page history
         Then the page should contain the plaintext "3.txt"
         Then the page should contain the plaintext "4.txt"
 
+    # Hangs a lot on AppVeyor
+    @posix
     Scenario: Listing history with qute:history redirect
         When I open data/numbers/3.txt
         And I open data/numbers/4.txt
@@ -104,12 +112,3 @@ Feature: Page history
         And I wait until qute://history is loaded
         Then the page should contain the plaintext "3.txt"
         Then the page should contain the plaintext "4.txt"
-
-    ## Bugs
-
-    @qtwebengine_skip @qtwebkit_ng_skip
-    Scenario: Opening a valid URL which turns out invalid
-        When I set general -> auto-search to true
-        And I run :open http://foo%40bar@baz
-        Then "QFSFileEngine::open: No file name specified" should be logged
-        And "Error while loading : Host  not found" should be logged

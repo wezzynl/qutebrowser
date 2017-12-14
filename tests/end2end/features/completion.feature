@@ -50,6 +50,8 @@ Feature: Using completion
         When I run :set-cmd-text -s :bind X
         Then the completion model should be bind
 
+    # See #2956
+    @flaky
     Scenario: Using session completion
         Given I open data/hello.txt
         And I run :session-save hello
@@ -61,11 +63,11 @@ Feature: Using completion
         Then the error "Session hello not found!" should be shown
 
     Scenario: Using option completion
-        When I run :set-cmd-text -s :set colors
+        When I run :set-cmd-text -s :set
         Then the completion model should be option
 
     Scenario: Using value completion
-        When I run :set-cmd-text -s :set colors statusbar.bg
+        When I run :set-cmd-text -s :set aliases
         Then the completion model should be value
 
     Scenario: Deleting an open tab via the completion
@@ -73,8 +75,11 @@ Feature: Using completion
         When I open data/hello.txt
         And I open data/hello2.txt in a new tab
         And I run :set-cmd-text -s :buffer
+        And I wait for "Setting completion pattern ''" in the log
         And I run :completion-item-focus next
+        And I wait for "setting text = ':buffer 0/1', *" in the log
         And I run :completion-item-focus next
+        And I wait for "setting text = ':buffer 0/2', *" in the log
         And I run :completion-item-del
         Then the following tabs should be open:
             - data/hello.txt (active)
@@ -90,3 +95,9 @@ Feature: Using completion
         Then the following tabs should be open:
             - data/hello2.txt (active)
             - data/hello.txt
+
+    Scenario: Space updates completion model after selecting full command
+        When I run :set-cmd-text :set
+        And I run :completion-item-focus next
+        And I run :set-cmd-text -s :set
+        Then the completion model should be option

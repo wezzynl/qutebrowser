@@ -22,28 +22,86 @@
 import collections
 
 from PyQt5.QtCore import QObject, pyqtSignal
-from PyQt5.QtSql import QSqlDatabase, QSqlQuery
+from PyQt5.QtSql import QSqlDatabase, QSqlQuery, QSqlError
 
-from qutebrowser.utils import log
+from qutebrowser.utils import log, debug
 
 
-class SqlException(Exception):
+class SqlError(Exception):
 
-    """Raised on an error interacting with the SQL database."""
+    """Raised on an error interacting with the SQL database.
 
-    pass
+    Attributes:
+        environmental: Whether the error is likely caused by the environment
+                       and not a qutebrowser bug.
+    """
+
+    def __init__(self, msg, environmental=False):
+        super().__init__(msg)
+        self.environmental = environmental
+
+    def text(self):
+        """Get a short text to display."""
+        return str(self)
+
+
+class SqliteError(SqlError):
+
+    """A SQL error with a QSqlError available.
+
+    Attributes:
+        error: The QSqlError object.
+    """
+
+    def __init__(self, msg, error):
+        super().__init__(msg)
+        self.error = error
+
+        log.sql.debug("SQL error:")
+        log.sql.debug("type: {}".format(
+            debug.qenum_key(QSqlError, error.type())))
+        log.sql.debug("database text: {}".format(error.databaseText()))
+        log.sql.debug("driver text: {}".format(error.driverText()))
+        log.sql.debug("error code: {}".format(error.nativeErrorCode()))
+
+        # https://sqlite.org/rescode.html
+        # https://github.com/qutebrowser/qutebrowser/issues/2930
+        # https://github.com/qutebrowser/qutebrowser/issues/3004
+        environmental_errors = [
+            '5',   # SQLITE_BUSY ("database is locked")
+            '8',   # SQLITE_READONLY
+            '13',  # SQLITE_FULL
+        ]
+        self.environmental = error.nativeErrorCode() in environmental_errors
+
+    def text(self):
+        return self.error.databaseText()
+
+    @classmethod
+    def from_query(cls, what, query, error):
+        """Construct an error from a failed query.
+
+        Arguments:
+            what: What we were doing when the error happened.
+            query: The query which was executed.
+            error: The QSqlError object.
+        """
+        msg = 'Failed to {} query "{}": "{}"'.format(what, query, error.text())
+        return cls(msg, error)
 
 
 def init(db_path):
     """Initialize the SQL database connection."""
     database = QSqlDatabase.addDatabase('QSQLITE')
     if not database.isValid():
-        raise SqlException('Failed to add database. '
-            'Are sqlite and Qt sqlite support installed?')
+        raise SqlError('Failed to add database. '
+                       'Are sqlite and Qt sqlite support installed?',
+                       environmental=True)
     database.setDatabaseName(db_path)
     if not database.open():
-        raise SqlException("Failed to open sqlite database at {}: {}"
-                           .format(db_path, database.lastError().text()))
+        error = database.lastError()
+        raise SqliteError("Failed to open sqlite database at {}: {}"
+                          .format(db_path, error.text()), error)
 
 
 def close():
@@ -60,7 +118,7 @@ def version():
             close()
             return ver
         return Query("select sqlite_version()").run().value()
-    except SqlException as e:
+    except SqlError as e:
         return 'UNAVAILABLE ({})'.format(e)
 
 
@@ -79,13 +137,12 @@ class Query(QSqlQuery):
         super().__init__(QSqlDatabase.database())
         log.sql.debug('Preparing SQL query: "{}"'.format(querystr))
         if not self.prepare(querystr):
-            raise SqlException('Failed to prepare query "{}": "{}"'.format(
-                querystr, self.lastError().text()))
+            raise SqliteError.from_query('prepare', querystr, self.lastError())
         self.setForwardOnly(forward_only)
 
     def __iter__(self):
         if not self.isActive():
-            raise SqlException("Cannot iterate inactive query")
+            raise SqlError("Cannot iterate inactive query")
         rec = self.record()
         fields = [rec.fieldName(i) for i in range(rec.count())]
         rowtype = collections.namedtuple('ResultRow', fields)
@@ -101,14 +158,14 @@ class Query(QSqlQuery):
             self.bindValue(':{}'.format(key), val)
         log.sql.debug('query bindings: {}'.format(self.boundValues()))
         if not self.exec_():
-            raise SqlException('Failed to exec query "{}": "{}"'.format(
-                               self.lastQuery(), self.lastError().text()))
+            raise SqliteError.from_query('exec', self.lastQuery(),
+                                         self.lastError())
         return self
 
     def value(self):
         """Return the result of a single-value query (e.g. an EXISTS)."""
         if not self.next():
-            raise SqlException("No result for single-result query")
+            raise SqlError("No result for single-result query")
         return self.record().value(0)
 
 
@@ -128,7 +185,7 @@ class SqlTable(QObject):
     def __init__(self, name, fields, constraints=None, parent=None):
         """Create a new table in the sql database.
 
-        Raises SqlException if the table already exists.
+        Does nothing if the table already exists.
 
         Args:
             name: Name of the table.
@@ -228,8 +285,7 @@ class SqlTable(QObject):
         db = QSqlDatabase.database()
         db.transaction()
         if not q.execBatch():
-            raise SqlException('Failed to exec query "{}": "{}"'.format(
-                               q.lastQuery(), q.lastError().text()))
+            raise SqliteError.from_query('exec', q.lastQuery(), q.lastError())
         db.commit()
         self.changed.emit()
 
