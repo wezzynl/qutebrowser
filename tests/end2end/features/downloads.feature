@@ -242,22 +242,23 @@ Feature: Downloading things from a website.
 
     ## Wrong invocations
 
-    Scenario: :download with deprecated dest-old argument
-        When I run :download http://localhost:(port)/ deprecated-argument
-        Then the warning ":download [url] [dest] is deprecated - use :download --dest [dest] [url]" should be shown
-
-    Scenario: Two destinations given
-        When I run :download --dest destination2 http://localhost:(port)/ destination1
-        Then the warning ":download [url] [dest] is deprecated - use :download --dest [dest] [url]" should be shown
-        And the error "Can't give two destinations for the download." should be shown
-
     Scenario: :download --mhtml with a URL given
         When I run :download --mhtml http://foobar/
         Then the error "Can only download the current page as mhtml." should be shown
 
+    Scenario: :download with a filename and directory which doesn't exist
+        When I run :download --dest (tmpdir)(dirsep)downloads(dirsep)somedir(dirsep)file http://localhost:(port)/data/downloads/download.bin
+        And I wait for "Asking question <qutebrowser.utils.usertypes.Question default=None mode=<PromptMode.yesno: 1> text='<b>*</b> does not exist. Create it?' title='Create directory?'>, *" in the log
+        And I run :prompt-accept yes
+        And I wait until the download is finished
+        Then the downloaded file somedir/file should exist
+
     Scenario: :download with a directory which doesn't exist
-        When I run :download --dest (tmpdir)/downloads/somedir/filename http://localhost:(port)/
-        Then the error "Download error: No such file or directory" should be shown
+        When I run :download --dest (tmpdir)(dirsep)downloads(dirsep)somedir(dirsep) http://localhost:(port)/data/downloads/download.bin
+        And I wait for "Asking question <qutebrowser.utils.usertypes.Question default=None mode=<PromptMode.yesno: 1> text='<b>*</b> does not exist. Create it?' title='Create directory?'>, *" in the log
+        And I run :prompt-accept yes
+        And I wait until the download is finished
+        Then the downloaded file somedir/download.bin should exist
 
     ## mhtml downloads
 
@@ -526,7 +527,7 @@ Feature: Downloading things from a website.
         And I open data/downloads/download.bin without waiting
         And I wait for the download prompt for "*"
         And I run :prompt-accept (tmpdir)(dirsep)downloads
-        And I open data/downloads/download.bin without waiting
+        And I open data/downloads/download2.bin without waiting
         And I wait for the download prompt for "*"
         And I directly open the download
         And I open data/downloads/download.bin without waiting

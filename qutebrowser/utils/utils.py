@@ -584,7 +584,7 @@ def disabled_excepthook():
             sys.excepthook = old_excepthook
 
 
-class prevent_exceptions:  # pylint: disable=invalid-name
+class prevent_exceptions:  # noqa: N801,N806 pylint: disable=invalid-name
 
     """Decorator to ignore and log exceptions.
 
@@ -869,7 +869,7 @@ def expand_windows_drive(path):
     # E:\. The correct way to specifify drive E: is "E:\", but most users
     # probably don't use the "multiple working directories" feature and expect
     # "E:" and "E:\" to be equal.
-    if re.match(r'[A-Z]:$', path, re.IGNORECASE):
+    if re.fullmatch(r'[A-Z]:', path, re.IGNORECASE):
         return path + "\\"
     else:
         return path

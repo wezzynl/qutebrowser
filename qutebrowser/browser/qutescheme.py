@@ -29,6 +29,7 @@ import os
 import time
 import textwrap
 import mimetypes
+import urllib
 
 import pkg_resources
 from PyQt5.QtCore import QUrlQuery, QUrl
@@ -41,6 +42,7 @@ from qutebrowser.misc import objects
 
 
 pyeval_output = ":pyeval was never called"
+spawn_output = ":spawn was never called"
 
 
 _HANDLERS = {}
@@ -91,7 +93,7 @@ class Redirect(Exception):
         self.url = url
 
 
-class add_handler:  # pylint: disable=invalid-name
+class add_handler:  # noqa: N801,N806 pylint: disable=invalid-name
 
     """Decorator to register a qute://* URL handler.
 
@@ -135,6 +137,11 @@ def data_for_url(url):
     Return:
         A (mimetype, data) tuple.
     """
+    norm_url = url.adjusted(QUrl.NormalizePathSegments |
+            QUrl.StripTrailingSlash)
+    if norm_url != url:
+        raise Redirect(norm_url)
+
     path = url.path()
     host = url.host()
     query = urlutils.query_string(url)
@@ -262,6 +269,13 @@ def qute_pyeval(_url):
     return 'text/html', html
 
 
+@add_handler('spawn-output')
+def qute_spawn_output(_url):
+    """Handler for qute://spawn-output."""
+    html = jinja.render('pre.html', title='spawn output', content=spawn_output)
+    return 'text/html', html
+
+
 @add_handler('version')
 @add_handler('verizon')
 def qute_version(_url):
@@ -331,9 +345,13 @@ def qute_help(url):
 
     path = 'html/doc/{}'.format(urlpath)
     if not urlpath.endswith('.html'):
+        try:
+            bdata = utils.read_file(path, binary=True)
+        except OSError as e:
+            raise QuteSchemeOSError(e)
         mimetype, _encoding = mimetypes.guess_type(urlpath)
         assert mimetype is not None, url
-        return mimetype, utils.read_file(path, binary=True)
+        return mimetype, bdata
 
     try:
         data = utils.read_file(path)
@@ -413,6 +431,18 @@ def qute_settings(url):
     html = jinja.render('settings.html', title='settings',
                         configdata=configdata,
                         confget=config.instance.get_str)
+    return 'text/html', html
+
+
+@add_handler('back')
+def qute_back(url):
+    """Handler for qute://back.
+
+    Simple page to free ram / lazy load a site, goes back on focusing the tab.
+    """
+    html = jinja.render(
+        'back.html',
+        title='Suspended: ' + urllib.parse.unquote(url.fragment()))
     return 'text/html', html
 
 
